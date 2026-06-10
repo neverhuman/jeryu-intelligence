@@ -1,0 +1,26 @@
+{
+  "owners": {
+    ".github/": "ops",
+    "AGENTS.md": "split",
+    "Cargo.lock": "workspace",
+    "Cargo.toml": "workspace",
+    "Justfile": "workspace",
+    "README.md": "docs",
+    "agent/": "agent",
+    "crates/jeryu-autonomy/**": "jeryu-intelligence",
+    "crates/jeryu-codegraph/**": "jeryu-intelligence",
+    "crates/jeryu-mcp/**": "jeryu-intelligence",
+    "crates/jeryu-review/**": "jeryu-intelligence",
+    "crates/jeryu-rustjet-cli/**": "jeryu-intelligence",
+    "crates/jeryu-rustjet/**": "jeryu-intelligence",
+    "docs/": "docs",
+    "docs/codegraph-oracle.md": "jeryu-intelligence",
+    "docs/codegraph-tool-build.md": "jeryu-intelligence",
+    "fixtures/rust-small/**": "jeryu-intelligence",
+    "ops/": "ops",
+    "ops/ci/codegraph-oracle.sh": "jeryu-intelligence",
+    "ops/ci/codegraph-tool-build.sh": "jeryu-intelligence",
+    "scripts/": "ops"
+  },
+  "workspace": "jeryu-intelligence"
+}

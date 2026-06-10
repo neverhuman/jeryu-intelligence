@@ -1,0 +1,75 @@
+{
+  "tests": {
+    ".github/": {
+      "command": "just fast && just check",
+      "lane": "ci",
+      "purpose": "verify hosted workflows stay thin and local-reproducible"
+    },
+    "AGENTS.md": {
+      "command": "just score",
+      "lane": "score",
+      "purpose": "verify split metadata and agent maps"
+    },
+    "Cargo.toml": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify workspace manifest shape"
+    },
+    "crates/jeryu-autonomy/**": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify jeryu-intelligence owned source remains build-addressable"
+    },
+    "crates/jeryu-codegraph/**": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify jeryu-intelligence owned source remains build-addressable"
+    },
+    "crates/jeryu-mcp/**": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify jeryu-intelligence owned source remains build-addressable"
+    },
+    "crates/jeryu-review/**": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify jeryu-intelligence owned source remains build-addressable"
+    },
+    "crates/jeryu-rustjet-cli/**": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify jeryu-intelligence owned source remains build-addressable"
+    },
+    "crates/jeryu-rustjet/**": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify jeryu-intelligence owned source remains build-addressable"
+    },
+    "docs/codegraph-oracle.md": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify jeryu-intelligence owned source remains build-addressable"
+    },
+    "docs/codegraph-tool-build.md": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify jeryu-intelligence owned source remains build-addressable"
+    },
+    "fixtures/rust-small/**": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify jeryu-intelligence owned source remains build-addressable"
+    },
+    "ops/ci/codegraph-oracle.sh": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify jeryu-intelligence owned source remains build-addressable"
+    },
+    "ops/ci/codegraph-tool-build.sh": {
+      "command": "just check",
+      "lane": "check",
+      "purpose": "verify jeryu-intelligence owned source remains build-addressable"
+    }
+  },
+  "workspace": "jeryu-intelligence"
+}
