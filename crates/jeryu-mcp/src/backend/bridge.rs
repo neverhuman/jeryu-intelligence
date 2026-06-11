@@ -85,16 +85,14 @@ impl BridgeBackend {
         let repo = RepoId::new(string_or_int(args, "repo"));
         let branch = str_arg(args, "branch_name");
         let base_ref = str_arg(args, "base_ref");
-        let paths: Vec<String> = args
-            .get("modifications")
-            .and_then(Value::as_array)
-            .map(|mods| {
-                mods.iter()
-                    .filter_map(|m| m.get("file_path").and_then(Value::as_str))
-                    .map(ToString::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let paths: Vec<String> = match args.get("modifications").and_then(Value::as_array) {
+            Some(mods) => mods
+                .iter()
+                .filter_map(|m| m.get("file_path").and_then(Value::as_str))
+                .map(ToString::to_string)
+                .collect(),
+            None => Vec::new(),
+        };
 
         if paths.is_empty() {
             return ToolResponse::error("propose_patch requires at least one modification");
@@ -177,10 +175,10 @@ impl BridgeBackend {
 }
 
 fn str_arg(args: &Value, key: &str) -> String {
-    args.get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+    match args.get(key).and_then(Value::as_str) {
+        Some(value) => value.to_string(),
+        None => String::new(),
+    }
 }
 
 /// Read an id-like arg that the MCP schema types as an integer but the bridge

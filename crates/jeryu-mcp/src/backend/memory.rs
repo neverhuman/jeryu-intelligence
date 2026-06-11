@@ -185,10 +185,10 @@ impl ToolBackend for MemoryBackend {
                 ToolResponse::ok("bugs", record)
             }
             "bug_show" => {
-                let id = args
-                    .get("bug_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
+                let id = match args.get("bug_id").and_then(Value::as_str) {
+                    Some(id) => id,
+                    None => return Ok(ToolResponse::error("bug_show requires bug_id")),
+                };
                 match self.show(id) {
                     Ok(record) => ToolResponse::ok("bug", record),
                     Err(e) => ToolResponse::error(e.to_string()),
@@ -203,10 +203,10 @@ impl ToolBackend for MemoryBackend {
                 ToolResponse::ok("ready bugs", record)
             }
             "bug_update" => {
-                let id = args
-                    .get("bug_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
+                let id = match args.get("bug_id").and_then(Value::as_str) {
+                    Some(id) => id,
+                    None => return Ok(ToolResponse::error("bug_update requires bug_id")),
+                };
                 let pick = |k: &str| args.get(k).and_then(Value::as_str).map(String::from);
                 match self.update(
                     id,
@@ -221,10 +221,10 @@ impl ToolBackend for MemoryBackend {
                 }
             }
             "bug_record_attempt" => {
-                let id = args
-                    .get("bug_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
+                let id = match args.get("bug_id").and_then(Value::as_str) {
+                    Some(id) => id,
+                    None => return Ok(ToolResponse::error("bug_record_attempt requires bug_id")),
+                };
                 match self.record_attempt(id, arg("attempt")) {
                     Ok(record) => ToolResponse::ok("attempt recorded", record),
                     Err(e) => ToolResponse::error(e.to_string()),
@@ -357,21 +357,28 @@ impl ToolBackend for MemoryBackend {
             "code.symbols.search" => {
                 let graph = CodeGraph::from_snapshot(sample_codegraph_snapshot());
                 let limit = arg("limit").as_u64().unwrap_or(20) as usize;
+                let query = match args.get("query").and_then(Value::as_str) {
+                    Some(query) => query,
+                    None => return Ok(ToolResponse::error("code.symbols.search requires query")),
+                };
                 ToolResponse::ok(
                     "code symbols",
                     serde_json::json!({
-                        "symbols": graph.search_symbols(arg("query").as_str().unwrap_or_default(), limit)
+                        "symbols": graph.search_symbols(query, limit)
                     }),
                 )
             }
             "code.definition" => {
                 let graph = CodeGraph::from_snapshot(sample_codegraph_snapshot());
-                let symbol = arg("symbol").as_str().unwrap_or_default().to_string();
+                let symbol = match args.get("symbol").and_then(Value::as_str) {
+                    Some(symbol) => symbol,
+                    None => return Ok(ToolResponse::error("code.definition requires symbol")),
+                };
                 ToolResponse::ok(
                     "code definition",
                     serde_json::json!({
-                        "symbol": symbol,
-                        "definition": graph.definition(arg("symbol").as_str().unwrap_or_default())
+                        "symbol": symbol.to_string(),
+                        "definition": graph.definition(symbol)
                     }),
                 )
             }
@@ -387,23 +394,33 @@ impl ToolBackend for MemoryBackend {
             }
             "code.crate.reverse_deps" => {
                 let graph = CodeGraph::from_snapshot(sample_codegraph_snapshot());
-                let crate_name = arg("crate_name").as_str().unwrap_or_default().to_string();
+                let crate_name = match args.get("crate_name").and_then(Value::as_str) {
+                    Some(crate_name) => crate_name,
+                    None => {
+                        return Ok(ToolResponse::error(
+                            "code.crate.reverse_deps requires crate_name",
+                        ));
+                    }
+                };
                 ToolResponse::ok(
                     "crate reverse dependencies",
                     serde_json::json!({
-                        "crate_name": crate_name,
-                        "reverse_deps": graph.reverse_deps(arg("crate_name").as_str().unwrap_or_default())
+                        "crate_name": crate_name.to_string(),
+                        "reverse_deps": graph.reverse_deps(crate_name)
                     }),
                 )
             }
             "code.references" => {
                 let graph = CodeGraph::from_snapshot(sample_codegraph_snapshot());
-                let symbol = arg("symbol").as_str().unwrap_or_default().to_string();
+                let symbol = match args.get("symbol").and_then(Value::as_str) {
+                    Some(symbol) => symbol,
+                    None => return Ok(ToolResponse::error("code.references requires symbol")),
+                };
                 ToolResponse::ok(
                     "code references",
                     serde_json::json!({
-                        "symbol": symbol,
-                        "references": graph.references(arg("symbol").as_str().unwrap_or_default())
+                        "symbol": symbol.to_string(),
+                        "references": graph.references(symbol)
                     }),
                 )
             }
@@ -493,16 +510,14 @@ impl ToolBackend for MemoryBackend {
 }
 
 fn string_array(value: &Value) -> Vec<String> {
-    value
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToString::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+    match value.as_array() {
+        Some(items) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 fn optional_string(value: &Value) -> Option<String> {
@@ -716,9 +731,9 @@ fn sample_control_plane_snapshot() -> Value {
             "nodes": [],
             "edges": [],
             "clusters": [{
-                "id": "cluster:stale-mirror",
+                "id": "cluster:superseded-mirror",
                 "label": "Mirror evidence",
-                "kind": "stale_mirror",
+                "kind": "superseded_mirror",
                 "state": "missing",
                 "severity": "medium",
                 "nodeIds": [],

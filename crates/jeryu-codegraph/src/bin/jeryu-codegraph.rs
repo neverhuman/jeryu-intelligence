@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use jeryu_codegraph::{
     CodeGraph, CodeGraphQuery, CodeGraphRepoIdentity, CodeGraphService, CodeGraphStore, Slice,
-    ToolBuildScanConfig, default_db_path, scan_tool_build_clusters,
+    ToolBuildScanConfig, scan_tool_build_clusters,
 };
 use jeryu_rustjet::WorkspaceGraph;
 
@@ -156,15 +156,20 @@ enum ToolBuildCommands {
     },
 }
 
-fn resolve_db(db: Option<PathBuf>) -> PathBuf {
-    db.unwrap_or_else(default_db_path)
+fn resolve_db(db: Option<PathBuf>) -> Result<PathBuf> {
+    match db {
+        Some(path) => Ok(path),
+        None => Err(anyhow::anyhow!(
+            "--db is required for jeryu-codegraph commands"
+        )),
+    }
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Index { root, db } => {
-            let store = CodeGraphStore::open(resolve_db(db)).context("open store")?;
+            let store = CodeGraphStore::open(resolve_db(db)?).context("open store")?;
             let graph = CodeGraph::index(&root).context("index workspace")?;
             graph.persist(&store).context("persist graph")?;
             let snapshot = graph.snapshot();
@@ -176,7 +181,7 @@ fn main() -> Result<()> {
             );
         }
         Commands::Impact { root, db, paths } => {
-            let _store = CodeGraphStore::open(resolve_db(db)).context("open store")?;
+            let _store = CodeGraphStore::open(resolve_db(db)?).context("open store")?;
             let workspace = WorkspaceGraph::load(&root).context("load workspace")?;
             let graph = CodeGraph::index_workspace(&workspace).context("index workspace")?;
             let report = graph.impact_of(&workspace, &paths);
@@ -200,7 +205,7 @@ fn main() -> Result<()> {
             ref_name,
             json,
         } => {
-            let store = CodeGraphStore::open(resolve_db(db)).context("open store")?;
+            let store = CodeGraphStore::open(resolve_db(db)?).context("open store")?;
             let service = CodeGraphService::new(root.clone(), store);
             let repo = CodeGraphRepoIdentity::local(&root);
             let query = CodeGraphQuery {
@@ -249,7 +254,7 @@ fn main() -> Result<()> {
             }
         }
         Commands::Validate { db } => {
-            let store = CodeGraphStore::open(resolve_db(db)).context("open store")?;
+            let store = CodeGraphStore::open(resolve_db(db)?).context("open store")?;
             let snapshot = store.load_snapshot().context("load snapshot")?;
             println!(
                 "valid: {} symbols, {} crate-dep edges",
@@ -268,16 +273,21 @@ fn main() -> Result<()> {
                 top,
                 json,
             } => {
-                let store = CodeGraphStore::open(resolve_db(db)).context("open store")?;
-                let repo_id = repo_id.unwrap_or_else(|| {
-                    root.file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("local")
-                        .to_string()
-                });
-                let commit = commit
-                    .or_else(|| git_head(&root))
-                    .unwrap_or_else(|| "working-tree".to_string());
+                let store = CodeGraphStore::open(resolve_db(db)?).context("open store")?;
+                let repo_id = match repo_id {
+                    Some(repo_id) => repo_id,
+                    None => match root.file_name().and_then(|name| name.to_str()) {
+                        Some(name) => name.to_string(),
+                        None => "local".to_string(),
+                    },
+                };
+                let commit = match commit {
+                    Some(commit) => commit,
+                    None => match git_head(&root) {
+                        Some(head) => head,
+                        None => "working-tree".to_string(),
+                    },
+                };
                 let report = scan_tool_build_clusters(
                     &root,
                     repo_id,
@@ -322,7 +332,7 @@ fn main() -> Result<()> {
                 include_ignored,
                 json,
             } => {
-                let store = CodeGraphStore::open(resolve_db(db)).context("open store")?;
+                let store = CodeGraphStore::open(resolve_db(db)?).context("open store")?;
                 let clusters = store
                     .tool_build_clusters(repo_id.as_deref(), top, include_ignored)
                     .context("load tool-build clusters")?;
@@ -331,11 +341,10 @@ fn main() -> Result<()> {
                 } else {
                     println!("tool-build clusters: {}", clusters.len());
                     for cluster in &clusters {
-                        let ignored = cluster
-                            .ignored
-                            .as_ref()
-                            .map(|i| format!(" ignored={}", i.reason))
-                            .unwrap_or_default();
+                        let ignored = match cluster.ignored.as_ref() {
+                            Some(ignored) => format!(" ignored={}", ignored.reason),
+                            None => String::new(),
+                        };
                         println!(
                             "  {} score={} occurrences={} files={}{}",
                             cluster.cluster_id,
@@ -354,7 +363,7 @@ fn main() -> Result<()> {
                 ignored_by,
                 json,
             } => {
-                let store = CodeGraphStore::open(resolve_db(db)).context("open store")?;
+                let store = CodeGraphStore::open(resolve_db(db)?).context("open store")?;
                 let ignored = store
                     .ignore_tool_build_cluster(&cluster_id, &reason, &ignored_by)
                     .context("ignore tool-build cluster")?;

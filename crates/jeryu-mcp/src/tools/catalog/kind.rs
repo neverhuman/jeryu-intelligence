@@ -246,10 +246,10 @@ impl ToolDefinition {
             ToolKind::CodegraphQuery => serde_json::json!({
                 "repo": opt_s("repo"),
                 "ref": opt_s("ref"),
-                "changed_paths": args
-                    .get("changed_paths")
-                    .and_then(parse_string_array)
-                    .unwrap_or_default(),
+                "changed_paths": match args.get("changed_paths").and_then(parse_string_array) {
+                    Some(paths) => paths,
+                    None => Vec::new(),
+                },
                 "intent": opt_s("intent"),
                 "question": opt_s("question"),
                 "symbol": opt_s("symbol"),
@@ -271,7 +271,10 @@ impl ToolDefinition {
             ToolKind::CodegraphToolBuildFeedback => serde_json::json!({
                 "cluster_id": s("cluster_id")?,
                 "reason": s("reason")?,
-                "ignored_by": opt_s("ignored_by").unwrap_or_else(|| "mcp".to_string()),
+                "ignored_by": match opt_s("ignored_by") {
+                    Some(ignored_by) => ignored_by,
+                    None => "mcp".to_string(),
+                },
             }),
             ToolKind::ControlPlaneStatus => serde_json::json!({}),
             ToolKind::ControlPlanePriorities => serde_json::json!({

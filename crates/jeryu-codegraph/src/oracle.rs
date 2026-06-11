@@ -97,16 +97,14 @@ impl CodeGraphService {
                 index_receipt: IndexReceipt {
                     run_id,
                     store_path: self.store.path().display().to_string(),
-                    ref_name: snapshot
-                        .index_runs
-                        .last()
-                        .map(|row| row.ref_name.clone())
-                        .unwrap_or_else(default_ref_name),
-                    commit: snapshot
-                        .index_runs
-                        .last()
-                        .map(|row| row.commit_sha.clone())
-                        .unwrap_or_default(),
+                    ref_name: match snapshot.index_runs.last() {
+                        Some(row) => row.ref_name.clone(),
+                        None => String::new(),
+                    },
+                    commit: match snapshot.index_runs.last() {
+                        Some(row) => row.commit_sha.clone(),
+                        None => String::new(),
+                    },
                     indexed_at,
                     analyzer_scope,
                 },
@@ -345,10 +343,14 @@ fn insert_context(
     governance: &GovernanceMetadata,
     row: Option<&FileRow>,
 ) {
-    let owner = row
-        .and_then(|file| file.owner.clone())
-        .or_else(|| governance.owner_for_path(path));
-    let mut proof_lanes = row.map(|file| file.proof_lanes.clone()).unwrap_or_default();
+    let owner = match row {
+        Some(file) => file.owner.clone(),
+        None => governance.owner_for_path(path),
+    };
+    let mut proof_lanes = match row {
+        Some(file) => file.proof_lanes.clone(),
+        None => Vec::new(),
+    };
     if let Some(rule) = governance.test_for_path(path)
         && !proof_lanes.contains(&rule.lane)
     {
@@ -357,9 +359,10 @@ fn insert_context(
     proof_lanes.sort();
     proof_lanes.dedup();
     let generated_zone = governance.generated_zone_for_path(path);
-    let editable = row
-        .map(|file| file.editable)
-        .unwrap_or_else(|| generated_zone.as_ref().is_none_or(|zone| zone.manual_edits));
+    let editable = match row {
+        Some(file) => file.editable,
+        None => generated_zone.as_ref().is_none_or(|zone| zone.manual_edits),
+    };
 
     let entry = files
         .entry(path.to_string())
@@ -400,10 +403,10 @@ fn selected_proof_lanes(
             continue;
         };
         let lane_rule = governance.proof_lanes.get(&test_rule.lane);
-        let required_commands = lane_rule
-            .map(|lane| lane.required.clone())
-            .filter(|commands| !commands.is_empty())
-            .unwrap_or_else(|| vec![test_rule.command.clone()]);
+        let required_commands = match lane_rule {
+            Some(lane) if !lane.required.is_empty() => lane.required.clone(),
+            _ => vec![test_rule.command.clone()],
+        };
         lanes
             .entry(test_rule.lane.clone())
             .or_insert(ProofLaneImpact {
@@ -515,10 +518,10 @@ fn attach_governance_rows(
             test_lane: governance
                 .test_for_path(&loaded.path)
                 .map(|rule| rule.lane.clone()),
-            proof_lanes: governance
-                .test_for_path(&loaded.path)
-                .map(|rule| vec![rule.lane.clone()])
-                .unwrap_or_default(),
+            proof_lanes: match governance.test_for_path(&loaded.path) {
+                Some(rule) => vec![rule.lane.clone()],
+                None => Vec::new(),
+            },
             generated_zone: governance
                 .generated_zone_for_path(&loaded.path)
                 .map(|zone| zone.path),
@@ -565,10 +568,10 @@ pub(super) fn normalize_changed_paths(paths: &[String]) -> Vec<String> {
 }
 
 pub(super) fn epoch_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default()
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_millis(),
+        Err(_) => 0,
+    }
 }
 
 fn sanitize_id(value: &str) -> String {
@@ -656,25 +659,22 @@ pub fn query_snapshot(
     query: &CodegraphQuery,
 ) -> CodegraphImpactPack {
     let graph = CodeGraph::from_snapshot(snapshot);
-    let symbols = query
-        .symbol
-        .as_deref()
-        .map(|symbol| graph.search_symbols(symbol, query.limit))
-        .unwrap_or_default();
+    let symbols = match query.symbol.as_deref() {
+        Some(symbol) => graph.search_symbols(symbol, query.limit),
+        None => Vec::new(),
+    };
     let definition = query
         .symbol
         .as_deref()
         .and_then(|symbol| graph.definition(symbol));
-    let references = query
-        .symbol
-        .as_deref()
-        .map(|symbol| graph.references(symbol))
-        .unwrap_or_default();
-    let reverse_deps = query
-        .crate_name
-        .as_deref()
-        .map(|name| graph.reverse_deps(name))
-        .unwrap_or_default();
+    let references = match query.symbol.as_deref() {
+        Some(symbol) => graph.references(symbol),
+        None => Vec::new(),
+    };
+    let reverse_deps = match query.crate_name.as_deref() {
+        Some(name) => graph.reverse_deps(name),
+        None => Vec::new(),
+    };
 
     let mut changed_crates = BTreeSet::new();
     for path in &query.changed_paths {
