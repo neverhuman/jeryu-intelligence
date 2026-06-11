@@ -1036,7 +1036,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jeryu-agentbridge"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "jeryu-ci-scheduler",
  "jeryu-core",
@@ -1047,7 +1047,7 @@ dependencies = [
 
 [[package]]
 name = "jeryu-autonomy"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1062,11 +1062,11 @@ dependencies = [
 
 [[package]]
 name = "jeryu-ci-ir"
-version = "4.0.0"
+version = "5.0.0"
 
 [[package]]
 name = "jeryu-ci-scheduler"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "jeryu-ci-ir",
  "jeryu-core",
@@ -1076,7 +1076,7 @@ dependencies = [
 
 [[package]]
 name = "jeryu-codegraph"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1091,7 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "jeryu-core"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "chrono",
  "hex",
@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "jeryu-mcp"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1125,14 +1125,14 @@ dependencies = [
 
 [[package]]
 name = "jeryu-proof"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "jeryu-core",
 ]
 
 [[package]]
 name = "jeryu-review"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1147,32 +1147,32 @@ dependencies = [
 
 [[package]]
 name = "jeryu-runner-core"
-version = "4.0.0"
+version = "5.0.0"
 
 [[package]]
 name = "jeryu-runner-protocol"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "jeryu-ci-ir",
 ]
 
 [[package]]
 name = "jeryu-rustjet"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "jeryu-rustjet-cli"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "jeryu-rustjet",
 ]
 
 [[package]]
 name = "jeryu-sandbox-linux"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "jeryu-runner-core",
  "landlock",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "jeryu-signing"
-version = "4.0.0"
+version = "5.0.0"
 dependencies = [
  "ed25519-dalek",
  "hex",
