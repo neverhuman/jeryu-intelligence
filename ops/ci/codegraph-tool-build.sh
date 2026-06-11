@@ -11,7 +11,9 @@ rm -f "${DB}"
 
 cargo test -p jeryu-codegraph --jobs "${JERYU_CI_JOBS}" tool_build
 cargo test -p jeryu-mcp --test mcp_conformance --jobs "${JERYU_CI_JOBS}"
-cargo test -p jeryu-api --features web --jobs "${JERYU_CI_JOBS}" tool_build
+# jeryu-api lives in the sibling jeryu-deploy workspace; cover its
+# codegraph/tool-build routes when the sibling checkout is present.
+if [ -d ../jeryu-deploy ]; then ( cd ../jeryu-deploy && cargo test -p jeryu-api --features web --jobs "${JERYU_CI_JOBS}" tool_build ); fi
 
 cargo run -q -p jeryu-codegraph -- tool-build scan \
   --root . \
