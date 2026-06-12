@@ -216,6 +216,18 @@ pub(crate) fn tool_definition(action_id: &str) -> Option<ToolDefinition> {
             tool_annotations(false, false, true, true),
             ToolKind::CodegraphToolBuildFeedback,
         ),
+        "tool_finder.clusters" => (
+            "Tool-finder clusters",
+            "Return ranked CROSS-REPO repeated-code clusters across the whole family — the leads worth extracting into a shared tool. Defaults to the family/jeryu-split scan; reuses the tool-build cluster index.",
+            tool_annotations(true, false, true, false),
+            ToolKind::CodegraphToolBuildClusters,
+        ),
+        "tool_registry.summary" => (
+            "Tool registry summary",
+            "Return the reusable-tool registry summary behind the golden box: tool counts by status, adopting repos, open build tasks, and realized + anticipated LOC saved.",
+            tool_annotations(true, false, true, false),
+            ToolKind::GetSystemSnapshot,
+        ),
         "control_plane.status" => (
             "Control-plane status",
             "Return the full live Jeryu control-plane intelligence snapshot.",

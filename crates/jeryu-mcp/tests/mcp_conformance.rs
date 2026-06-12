@@ -183,6 +183,8 @@ fn manifest_covers_all_catalog_actions() {
         "codegraph.tool_build.status",
         "codegraph.tool_build.clusters",
         "codegraph.tool_build.feedback",
+        "tool_finder.clusters",
+        "tool_registry.summary",
         "control_plane.status",
         "control_plane.priorities",
         "repo_graph.clusters",
@@ -193,8 +195,8 @@ fn manifest_covers_all_catalog_actions() {
     ];
     assert_eq!(
         names.len(),
-        42,
-        "expected exactly 42 tools, got {}",
+        44,
+        "expected exactly 44 tools, got {}",
         names.len()
     );
     for id in expected {
@@ -272,7 +274,7 @@ async fn stdio_initialize_and_tools_list_work() {
         .await;
     assert_eq!(list.len(), 1);
     assert!(list[0]["result"]["tools"].is_array());
-    assert_eq!(list[0]["result"]["tools"].as_array().unwrap().len(), 42);
+    assert_eq!(list[0]["result"]["tools"].as_array().unwrap().len(), 44);
 }
 
 #[tokio::test]
