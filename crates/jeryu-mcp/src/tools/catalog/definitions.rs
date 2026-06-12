@@ -222,6 +222,18 @@ pub(crate) fn tool_definition(action_id: &str) -> Option<ToolDefinition> {
             tool_annotations(true, false, true, false),
             ToolKind::CodegraphToolBuildClusters,
         ),
+        "tool_finder.scan" => (
+            "Tool-finder system scan",
+            "Start the system-wide duplicate-code scan across EVERY split family on the host. Single-flight: returns the running status when a scan is already in flight. Progress streams on the tool_finder.scan websocket scope.",
+            tool_annotations(false, false, true, true),
+            ToolKind::ToolFinderScan,
+        ),
+        "tool_finder.dashboard" => (
+            "Tool-finder dashboard",
+            "Return the /tools pattern-family dashboard over the persisted system-wide scan: clusters grouped into families with categories, repos spanned, and anticipated LOC saved per shared-tool candidate.",
+            tool_annotations(true, false, true, false),
+            ToolKind::ToolFinderDashboard,
+        ),
         "tool_registry.summary" => (
             "Tool registry summary",
             "Return the reusable-tool registry summary behind the golden box: tool counts by status, adopting repos, open build tasks, and realized + anticipated LOC saved.",

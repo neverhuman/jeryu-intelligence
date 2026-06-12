@@ -7,7 +7,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use jeryu_codegraph::{
     CodeGraph, CodeGraphQuery, CodeGraphRepoIdentity, CodeGraphService, CodeGraphStore, Slice,
-    ToolBuildScanConfig, scan_tool_build_clusters, scan_tool_build_family,
+    ToolBuildScanConfig, ToolBuildScanOptions, discover_system_repo_roots,
+    scan_tool_build_clusters, scan_tool_build_family, scan_tool_build_system,
 };
 use jeryu_rustjet::WorkspaceGraph;
 use serde::Deserialize;
@@ -153,6 +154,50 @@ enum ToolBuildCommands {
         /// Emit full JSON report.
         #[arg(long)]
         json: bool,
+    },
+    /// Scan EVERY repo across EVERY split family on this host into one
+    /// system-wide index (repo enumeration via `<parent>/*-split/
+    /// repos.manifest.toml`). Runs the full v2 pipeline: parallel workers,
+    /// gitignore-aware discovery, generated-zone/scaffold/test awareness,
+    /// window quality filters, overlap merging, categories, and pattern
+    /// families. Persisted under `--repo-id` (default `system/host`).
+    ScanSystem {
+        /// Directories whose `*-split` children carry family manifests.
+        #[arg(long = "manifest-parent", default_values_os_t = vec![PathBuf::from("/home/ubuntu")])]
+        manifest_parents: Vec<PathBuf>,
+        /// SQLite database path (defaults to ~/.local/share/jeryu/codegraph.sqlite).
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Synthetic repo id for the persisted system-wide cluster rows.
+        #[arg(long, default_value = "system/host")]
+        repo_id: String,
+        /// Commit/ref label for persisted cluster rows.
+        #[arg(long, default_value = "working-tree")]
+        commit: String,
+        /// Number of normalized non-empty lines per fingerprinted window.
+        #[arg(long, default_value_t = 8)]
+        window_lines: usize,
+        /// Minimum occurrences before a fingerprint becomes a cluster.
+        #[arg(long, default_value_t = 2)]
+        min_occurrences: usize,
+        /// Minimum distinct repos a cluster must span to be kept.
+        #[arg(long, default_value_t = 2)]
+        min_repos: usize,
+        /// Maximum clusters to persist/return.
+        #[arg(long, default_value_t = 200)]
+        top: usize,
+        /// Worker threads (0 = all cores).
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
+        /// Disable overlap merging (keep the raw window ladder).
+        #[arg(long)]
+        no_merge_overlaps: bool,
+        /// Emit full JSON report.
+        #[arg(long)]
+        json: bool,
+        /// Print live progress to stderr.
+        #[arg(long)]
+        progress: bool,
     },
     /// List persisted tool-building clusters.
     Clusters {
@@ -413,6 +458,91 @@ fn main() -> Result<()> {
                             cluster.occurrence_count,
                             cluster.file_count,
                             cluster.insight
+                        );
+                    }
+                }
+            }
+            ToolBuildCommands::ScanSystem {
+                manifest_parents,
+                db,
+                repo_id,
+                commit,
+                window_lines,
+                min_occurrences,
+                min_repos,
+                top,
+                threads,
+                no_merge_overlaps,
+                json,
+                progress,
+            } => {
+                let store = CodeGraphStore::open(resolve_db(db)?).context("open store")?;
+                let roots = discover_system_repo_roots(&manifest_parents)
+                    .context("discover split-family repos")?;
+                if roots.is_empty() {
+                    anyhow::bail!(
+                        "no split-family repos discovered under {}",
+                        manifest_parents
+                            .iter()
+                            .map(|parent| parent.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                let mut options = ToolBuildScanOptions::system_default();
+                options.base.window_lines = window_lines;
+                options.base.min_occurrences = min_occurrences;
+                options.base.min_repo_count = min_repos;
+                options.base.max_clusters = top;
+                options.threads = threads;
+                options.merge_overlaps = !no_merge_overlaps;
+                let started = std::time::Instant::now();
+                let on_progress = move |event: jeryu_codegraph::ToolBuildScanProgress| {
+                    if progress {
+                        eprintln!(
+                            "[{}] {}/{} repos {} files={} skipped={} clusters={}",
+                            event.phase.as_str(),
+                            event.repos_done,
+                            event.repo_total,
+                            event.current_repo,
+                            event.files_scanned,
+                            event.files_skipped,
+                            event.clusters_so_far,
+                        );
+                    }
+                };
+                let report =
+                    scan_tool_build_system(&roots, repo_id, commit, &options, &on_progress)
+                        .context("scan system tool-build clusters")?;
+                store
+                    .persist_tool_build_report(&report)
+                    .context("persist system tool-build clusters")?;
+                let inherited = store
+                    .propagate_ignores_to_merged(&report.clusters)
+                    .context("propagate ignore feedback onto merged clusters")?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!(
+                        "tool-build system scan: repos={} files={} skipped={} clusters={} families={} inherited-ignores={} elapsed={:.1}s -> {}",
+                        roots.len(),
+                        report.scanned_files,
+                        report.skipped_files,
+                        report.clusters.len(),
+                        report.families.len(),
+                        inherited,
+                        started.elapsed().as_secs_f64(),
+                        store.path().display()
+                    );
+                    for family in report.families.iter().take(15) {
+                        println!(
+                            "  {} [{}] {} clusters={} repos={} loc_saved~{}",
+                            family.family_id,
+                            family.category.as_str(),
+                            family.label,
+                            family.cluster_count,
+                            family.repo_ids.len(),
+                            family.anticipated_loc_saved_total,
                         );
                     }
                 }

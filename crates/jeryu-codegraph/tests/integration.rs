@@ -176,7 +176,7 @@ fn persist_round_trip() {
     store.persist(&snapshot).unwrap();
     let loaded = store.load_snapshot().unwrap();
     assert_eq!(loaded, snapshot);
-    assert_eq!(store.schema_version().unwrap(), "3");
+    assert_eq!(store.schema_version().unwrap(), "4");
     assert_eq!(store.references("CodeGraph").unwrap(), snapshot.symbol_refs);
     assert_eq!(
         store.reverse_deps("jeryu-rustjet").unwrap(),
@@ -328,7 +328,10 @@ pub fn alpha_retry(input: &str) -> Result<String, String> {
     // Every surviving cluster must satisfy the min_repo_count=2 filter: a window
     // that lived in only one repo must NOT be returned by the family scan.
     assert!(
-        report.clusters.iter().all(|cluster| cluster.repo_count >= 2),
+        report
+            .clusters
+            .iter()
+            .all(|cluster| cluster.repo_count >= 2),
         "family scan must drop single-repo clusters when min_repo_count=2"
     );
 
@@ -386,7 +389,7 @@ fn oracle_query_pack_includes_provenance_refs_and_lanes() {
     )
     .unwrap();
 
-    assert_eq!(pack.provenance.storage_schema, "3");
+    assert_eq!(pack.provenance.storage_schema, "4");
     assert_eq!(pack.definition.as_ref().unwrap().symbol, "CodeGraph");
     assert_eq!(
         pack.references[0].ref_file,
@@ -632,4 +635,397 @@ fn oracle_query_builds_auditable_impact_pack() {
 
     let _ = std::fs::remove_file(&db);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Dense fixture whose 8-line windows clear the default 36-token floor.
+/// MUST stay byte-identical to the corpus used to pin the golden ids below.
+const PARITY_HANDLER: &str = r#"pub fn alpha_handler(req: Request, ctx: &Context) -> Response {
+    let parsed = validate_input(req.body(), ctx.schema(), MAX_BYTES).expect("validated");
+    let token = ctx.auth().issue_token(parsed.user_id(), Scope::ReadWrite, EXPIRY_SECS);
+    let record = Record::new(parsed.id(), parsed.payload(), token.claims(), now_ms());
+    audit_log(ctx.logger(), "create", record.id(), record.actor(), record.checksum());
+    let stored = ctx.store().insert(record.clone(), WriteMode::Durable).map_err(wrap_err)?;
+    notify_subscribers(ctx.bus(), Topic::Created, stored.id(), stored.version());
+    metrics_incr(ctx.metrics(), "records_created_total", 1, &[("kind", "create")]);
+    Response::created(stored.id(), stored.version(), etag_for(stored.checksum()))
+}
+"#;
+
+/// Golden parity pin: the v1 binary (pre-rewrite `jeryu-codegraph tool-build
+/// scan --window-lines 8`) produced EXACTLY these cluster ids, fingerprints,
+/// and scores on this fixture. The rewritten scanner must keep them
+/// byte-identical or every persisted cluster id and ignore row breaks.
+#[test]
+fn tool_build_v1_fingerprints_are_byte_stable() {
+    let root = unique_dir("tool-build-parity");
+    write_file(&root, "crates/a/src/lib.rs", PARITY_HANDLER);
+    write_file(
+        &root,
+        "crates/b/src/lib.rs",
+        &PARITY_HANDLER.replace("alpha_handler", "beta_handler"),
+    );
+    let config = ToolBuildScanConfig {
+        window_lines: 8,
+        min_normalized_tokens: 36,
+        min_occurrences: 2,
+        max_file_bytes: 512 * 1024,
+        max_clusters: 20,
+        min_repo_count: 1,
+    };
+    let report = scan_tool_build_clusters(&root, "parity", "c1", config).unwrap();
+    assert_eq!(report.scanned_files, 2);
+    assert_eq!(report.clusters.len(), 2);
+
+    let first = &report.clusters[0];
+    assert_eq!(first.cluster_id, "toolbuild-efdd149d2df5fdf0");
+    assert_eq!(
+        first.fingerprint,
+        "efdd149d2df5fdf0e18e65c1002e7191ca3bddf217ad13a6712c814f3229d357"
+    );
+    assert_eq!(first.score, 820);
+    assert_eq!(first.occurrence_count, 2);
+    assert_eq!(first.total_lines, 16);
+    assert_eq!(first.file_count, 2);
+    assert_eq!(first.occurrences[0].start_line, 2);
+    assert_eq!(first.occurrences[0].end_line, 9);
+    assert_eq!(first.occurrences[0].normalized_token_count, 151);
+
+    let second = &report.clusters[1];
+    assert_eq!(second.cluster_id, "toolbuild-e94583fddcc261b6");
+    assert_eq!(
+        second.fingerprint,
+        "e94583fddcc261b63c41a8877d17c4e0fd04619ab2b14dcb7e60cd34664563f0"
+    );
+    assert_eq!(second.score, 748);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// End-to-end v2 system scan: nested + pathless manifests are discovered,
+/// gitignored junk never enters the index, the duplicated-block ladder merges
+/// into ONE honest maximal cluster, scaffold clusters are categorized (not
+/// dropped), generated zones are skipped, `system/host` rows coexist with
+/// `family/...` rows, ignores propagate onto merged clusters, progress phases
+/// arrive in order, and the output is thread-count invariant.
+#[test]
+fn tool_build_system_scan_end_to_end() {
+    use std::sync::Mutex;
+
+    use jeryu_codegraph::{
+        ToolBuildCategory, ToolBuildScanOptions, ToolBuildScanPhase, discover_system_repo_roots,
+        scan_tool_build_system,
+    };
+
+    let parent = unique_dir("system-scan-parent");
+
+    // Family "alpha-split": manifest at the family root with explicit paths.
+    let repo_a = parent.join("alpha-split/repo-a");
+    write_file(
+        &parent.join("alpha-split"),
+        "repos.manifest.toml",
+        &format!(
+            "[[repo]]\npath = \"{}\"\nname = \"repo-a\"\ngithub_slug = \"nh/repo-a\"\n",
+            repo_a.display()
+        ),
+    );
+    // Family "beta-split": nested manifest with NO path keys (jankurai shape);
+    // repos resolve as siblings of the manifest's parent directory. The
+    // "repo-a-live" entry is a SECOND checkout of the same logical repo
+    // (github remote collides with alpha's github_slug, case-insensitively)
+    // and must be deduped — otherwise two checkouts of one repo would
+    // manufacture fake cross-repo duplication.
+    let live_checkout = parent.join("beta-split/repo-a-live");
+    write_file(
+        &parent.join("beta-split/beta"),
+        "repos.manifest.toml",
+        &format!(
+            "[[repo]]\nname = \"beta\"\n\n[[repo]]\nname = \"repo-b\"\n\n\
+             [[repo]]\nname = \"repo-a-live\"\npath = \"{}\"\n\
+             github = \"https://github.com/NH/repo-a.git\"\n",
+            live_checkout.display()
+        ),
+    );
+    let repo_b = parent.join("beta-split/repo-b");
+    std::fs::create_dir_all(parent.join("beta-split/beta/src")).unwrap();
+    write_file(&live_checkout, "src/handlers.rs", PARITY_HANDLER);
+
+    // The duplicated handler plus a shared tail line: 11 normalized lines at
+    // window 8 give window starts 0..=3; start 0 carries the renamed
+    // identifier (call:alpha_handler vs call:gamma_handler) so only starts
+    // 1..=3 repeat across repos — a ladder of exactly 3 chainable windows.
+    // Comments/blanks interleave to prove chaining runs in normalized space.
+    let block_a = format!(
+        "// preamble comment\n\n{PARITY_HANDLER}\npub fn shared_tail(x: Foo) -> Bar {{ convert(x.alpha(), x.beta(), x.gamma(), DEFAULT_TIMEOUT) }}\n"
+    );
+    write_file(&repo_a, "src/handlers.rs", &block_a);
+    write_file(
+        &repo_b,
+        "src/service.rs",
+        &block_a.replace("alpha_handler", "gamma_handler"),
+    );
+
+    // Managed scaffold: identical CI lane script in both repos.
+    let scaffold = r#"set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+run_lane "fmt" cargo fmt --check --all
+run_lane "clippy" cargo clippy --all-targets -- -D warnings
+run_lane "test" cargo test --workspace --all-features
+record_artifact "$ROOT/.artifacts/check.json" "$LANE_STATUS"
+publish_check "$ROOT" "check" "$LANE_STATUS" "$CHECK_URL"
+enforce_floor "$ROOT" "$LANE_STATUS" "$FLOOR" "$HARD_FINDINGS"
+summarize "$ROOT/.artifacts" "check lane complete" "$LANE_STATUS"
+exit_with "$LANE_STATUS"
+"#;
+    write_file(&repo_a, "ops/ci/check.sh", scaffold);
+    write_file(&repo_b, "ops/ci/check.sh", scaffold);
+
+    // Generated zone: identical generated content must NOT cluster.
+    write_file(
+        &repo_a,
+        "agent/generated-zones.toml",
+        "[[zones]]\npath = \"genzone/**\"\n",
+    );
+    write_file(
+        &repo_b,
+        "agent/generated-zones.toml",
+        "[[zones]]\npath = \"genzone/**\"\n",
+    );
+    write_file(&repo_a, "genzone/gen.rs", PARITY_HANDLER);
+    write_file(&repo_b, "genzone/gen.rs", PARITY_HANDLER);
+
+    // Gitignored junk: identical content under an ignored dir in a REAL git
+    // repo must never enter the index (git ls-files discovery).
+    write_file(&repo_a, ".gitignore", "junk/\n");
+    write_file(&repo_a, "junk/copy.rs", PARITY_HANDLER);
+    let git_init = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo_a)
+        .arg("init")
+        .arg("-q")
+        .status()
+        .expect("git init");
+    assert!(git_init.success());
+
+    let roots = discover_system_repo_roots(std::slice::from_ref(&parent)).unwrap();
+    let ids: Vec<&str> = roots.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(ids, vec!["beta", "repo-a", "repo-b"]);
+
+    let mut options = ToolBuildScanOptions::system_default();
+    options.base.max_clusters = 50;
+    options.threads = 1;
+
+    // Pre-seed a family row to prove the system scan cannot stomp it.
+    let db = unique_db("system-scan");
+    let store = CodeGraphStore::open(&db).unwrap();
+    let family_report = scan_tool_build_family(
+        &[
+            ("repo-a".to_string(), repo_a.clone()),
+            ("repo-b".to_string(), repo_b.clone()),
+        ],
+        "family/fixture",
+        "working-tree",
+        ToolBuildScanConfig {
+            min_repo_count: 2,
+            ..ToolBuildScanConfig::default()
+        },
+    )
+    .unwrap();
+    assert!(!family_report.clusters.is_empty());
+    store.persist_tool_build_report(&family_report).unwrap();
+    // Ignore one PRE-MERGE window id so the merged cluster can inherit it.
+    let window_id = &family_report.clusters[0].cluster_id;
+    store
+        .ignore_tool_build_cluster(window_id, "fixture noise", "test")
+        .unwrap();
+
+    let events = Mutex::new(Vec::new());
+    let report = scan_tool_build_system(&roots, "system/host", "working-tree", &options, &|p| {
+        events.lock().unwrap().push(p);
+    })
+    .unwrap();
+
+    // Phases arrive in pipeline order.
+    let phases: Vec<ToolBuildScanPhase> = {
+        let events = events.lock().unwrap();
+        events.iter().map(|event| event.phase).collect()
+    };
+    assert_eq!(phases.first(), Some(&ToolBuildScanPhase::Discover));
+    assert!(phases.contains(&ToolBuildScanPhase::Scan));
+    assert!(phases.contains(&ToolBuildScanPhase::Merge));
+    assert_eq!(phases.last(), Some(&ToolBuildScanPhase::Finalize));
+    let scan_pos = phases
+        .iter()
+        .position(|p| *p == ToolBuildScanPhase::Scan)
+        .unwrap();
+    let merge_pos = phases
+        .iter()
+        .position(|p| *p == ToolBuildScanPhase::Merge)
+        .unwrap();
+    assert!(scan_pos < merge_pos);
+
+    // The handler ladder merged into ONE maximal cluster with honest spans.
+    let handler = report
+        .clusters
+        .iter()
+        .find(|cluster| cluster.language == "rust" && !cluster.member_cluster_ids.is_empty())
+        .expect("merged rust handler cluster");
+    assert_eq!(handler.occurrence_count, 2);
+    assert_eq!(handler.repo_count, 2);
+    assert_eq!(handler.category, ToolBuildCategory::ToolCandidate);
+    assert!(
+        handler.member_cluster_ids.len() >= 3,
+        "ladder of 3+ windows chained"
+    );
+    let occ = &handler.occurrences[0];
+    // Raw span covers the whole duplicated block (comment/blank interleave
+    // proves chaining ran in normalized space).
+    assert!(occ.end_line - occ.start_line + 1 >= 10);
+    // No occurrence from gitignored junk or generated zones.
+    assert!(
+        report.clusters.iter().all(|cluster| cluster
+            .occurrences
+            .iter()
+            .all(|o| !o.path.starts_with("junk/") && !o.path.starts_with("genzone/"))),
+        "ignored/generated paths must never cluster"
+    );
+
+    // Scaffold repetition is visible but categorized, never a tool candidate.
+    let scaffold_cluster = report
+        .clusters
+        .iter()
+        .find(|cluster| {
+            cluster
+                .occurrences
+                .iter()
+                .any(|o| o.path == "ops/ci/check.sh")
+        })
+        .expect("scaffold cluster present");
+    assert_eq!(
+        scaffold_cluster.category,
+        ToolBuildCategory::ManagedScaffold
+    );
+
+    // Families exist and cover the handler cluster.
+    assert!(!report.families.is_empty());
+    assert!(
+        report
+            .families
+            .iter()
+            .any(|family| family.cluster_ids.contains(&handler.cluster_id))
+    );
+
+    // Persist under system/host; family rows intact; merged ignore inherited.
+    store.persist_tool_build_report(&report).unwrap();
+    store.propagate_ignores_to_merged(&report.clusters).unwrap();
+    let family_rows = store
+        .tool_build_clusters(Some("family/fixture"), 100, true)
+        .unwrap();
+    assert_eq!(family_rows.len(), family_report.clusters.len());
+    let system_rows = store
+        .tool_build_clusters(Some("system/host"), 100, true)
+        .unwrap();
+    assert_eq!(system_rows.len(), report.clusters.len());
+    let merged_row = system_rows
+        .iter()
+        .find(|cluster| cluster.member_cluster_ids.contains(window_id))
+        .expect("merged cluster containing the ignored window id");
+    assert!(
+        merged_row
+            .ignored
+            .as_ref()
+            .is_some_and(|i| i.reason.contains("inherited")),
+        "merged cluster inherits the member window's ignore"
+    );
+
+    // Families recompute identically from persisted rows.
+    let from_store = store
+        .tool_build_families(Some("system/host"), 100, true)
+        .unwrap();
+    assert_eq!(from_store.len(), report.families.len());
+
+    // Thread-count invariance: an 8-worker scan yields identical clusters.
+    options.threads = 8;
+    let report_mt =
+        scan_tool_build_system(&roots, "system/host", "working-tree", &options, &|_| {}).unwrap();
+    assert_eq!(report.clusters, report_mt.clusters);
+    assert_eq!(report.families, report_mt.families);
+
+    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// Opening a v3-shaped store (single-column PK, no category columns) migrates
+/// it in place: rows and ignore joins survive, and the table gains the
+/// composite primary key that lets family and system scans coexist.
+#[test]
+fn tool_build_storage_migrates_v3_to_v4() {
+    let db = unique_db("migrate-v3");
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            r#"
+CREATE TABLE codegraph_tool_build_clusters (
+    cluster_id         TEXT PRIMARY KEY,
+    repo_id            TEXT NOT NULL,
+    commit_sha         TEXT NOT NULL,
+    fingerprint        TEXT NOT NULL,
+    score              INTEGER NOT NULL,
+    occurrence_count   INTEGER NOT NULL,
+    repo_count         INTEGER NOT NULL,
+    file_count         INTEGER NOT NULL,
+    total_lines        INTEGER NOT NULL,
+    language           TEXT NOT NULL,
+    insight            TEXT NOT NULL,
+    normalized_preview TEXT NOT NULL,
+    occurrences_json   TEXT NOT NULL,
+    created_at         TEXT NOT NULL
+);
+CREATE TABLE codegraph_tool_build_ignores (
+    cluster_id TEXT PRIMARY KEY,
+    reason     TEXT NOT NULL,
+    ignored_by TEXT NOT NULL,
+    ignored_at TEXT NOT NULL
+);
+CREATE TABLE codegraph_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+INSERT INTO codegraph_meta (key, value) VALUES ('schema_version', '3');
+INSERT INTO codegraph_tool_build_clusters VALUES
+  ('toolbuild-old1', 'family/jeryu-split', 'sha1', 'fp1', 100, 2, 2, 2, 16,
+   'rust', 'insight', 'preview', '[]', '1000');
+INSERT INTO codegraph_tool_build_ignores VALUES
+  ('toolbuild-old1', 'pre-migration ignore', 'operator', '1001');
+"#,
+        )
+        .unwrap();
+    }
+
+    let store = CodeGraphStore::open(&db).unwrap();
+    assert_eq!(store.schema_version().unwrap(), "4");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let ddl: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='codegraph_tool_build_clusters'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(ddl.contains("PRIMARY KEY (repo_id, cluster_id)"));
+
+    let rows = store
+        .tool_build_clusters(Some("family/jeryu-split"), 10, true)
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].cluster_id, "toolbuild-old1");
+    assert!(
+        rows[0]
+            .ignored
+            .as_ref()
+            .is_some_and(|i| i.reason == "pre-migration ignore")
+    );
+    assert!(rows[0].member_cluster_ids.is_empty());
+
+    // Re-opening is a no-op (shape already migrated).
+    let again = CodeGraphStore::open(&db).unwrap();
+    assert_eq!(again.tool_build_clusters(None, 10, true).unwrap().len(), 1);
+
+    let _ = std::fs::remove_file(&db);
 }

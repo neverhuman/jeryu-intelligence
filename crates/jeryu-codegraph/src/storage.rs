@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS codegraph_slice_locks (
 );
 
 CREATE TABLE IF NOT EXISTS codegraph_tool_build_clusters (
-    cluster_id         TEXT PRIMARY KEY,
+    cluster_id         TEXT NOT NULL,
     repo_id            TEXT NOT NULL,
     commit_sha         TEXT NOT NULL,
     fingerprint        TEXT NOT NULL,
@@ -99,7 +99,10 @@ CREATE TABLE IF NOT EXISTS codegraph_tool_build_clusters (
     insight            TEXT NOT NULL,
     normalized_preview TEXT NOT NULL,
     occurrences_json   TEXT NOT NULL,
-    created_at         TEXT NOT NULL
+    created_at         TEXT NOT NULL,
+    category           TEXT NOT NULL DEFAULT 'tool-candidate',
+    member_cluster_ids_json TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (repo_id, cluster_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_codegraph_tool_build_clusters_rank
@@ -117,7 +120,7 @@ CREATE TABLE IF NOT EXISTS codegraph_meta (
     value TEXT NOT NULL
 );
 
-INSERT OR REPLACE INTO codegraph_meta (key, value) VALUES ('schema_version', '3');
+INSERT OR REPLACE INTO codegraph_meta (key, value) VALUES ('schema_version', '4');
 "#;
 
 /// Default database location under the user's local Jeryu data directory.
@@ -277,6 +280,7 @@ impl CodeGraphStore {
         let conn = store.connect()?;
         conn.execute_batch(SCHEMA)
             .map_err(|e| CodeGraphError::Storage(e.to_string()))?;
+        migrate_tool_build_clusters(&conn)?;
         Ok(store)
     }
 
@@ -288,6 +292,12 @@ impl CodeGraphStore {
     fn connect(&self) -> Result<Connection> {
         let conn =
             Connection::open(&self.path).map_err(|e| CodeGraphError::Storage(e.to_string()))?;
+        // Concurrent readers/writers are normal here: the live API serves the
+        // dashboard while a scan persists, and CLI scans run alongside the
+        // server. Wait for the lock instead of failing with "database is
+        // locked".
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| CodeGraphError::Storage(e.to_string()))?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")
             .map_err(|e| CodeGraphError::Storage(e.to_string()))?;
         Ok(conn)
@@ -669,8 +679,8 @@ impl CodeGraphStore {
                 "INSERT OR REPLACE INTO codegraph_tool_build_clusters \
                  (cluster_id, repo_id, commit_sha, fingerprint, score, occurrence_count, \
                   repo_count, file_count, total_lines, language, insight, normalized_preview, \
-                  occurrences_json, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                  occurrences_json, created_at, category, member_cluster_ids_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 params![
                     cluster.cluster_id,
                     cluster.repo_id,
@@ -687,6 +697,9 @@ impl CodeGraphStore {
                     serde_json::to_string(&cluster.occurrences)
                         .map_err(|e| CodeGraphError::Storage(e.to_string()))?,
                     report.scanned_at,
+                    cluster.category.as_str(),
+                    serde_json::to_string(&cluster.member_cluster_ids)
+                        .map_err(|e| CodeGraphError::Storage(e.to_string()))?,
                 ],
             )
             .map_err(|e| CodeGraphError::Storage(e.to_string()))?;
@@ -708,6 +721,7 @@ impl CodeGraphStore {
         let sql_all = "SELECT c.cluster_id, c.repo_id, c.commit_sha, c.fingerprint, c.score, \
                        c.occurrence_count, c.repo_count, c.file_count, c.total_lines, \
                        c.language, c.insight, c.normalized_preview, c.occurrences_json, \
+                       c.category, c.member_cluster_ids_json, \
                        i.reason, i.ignored_by, i.ignored_at \
                        FROM codegraph_tool_build_clusters c \
                        LEFT JOIN codegraph_tool_build_ignores i ON i.cluster_id = c.cluster_id";
@@ -820,11 +834,146 @@ impl CodeGraphStore {
         Ok(ignored)
     }
 
+    /// The `created_at` stamp (unix millis) of the persisted scan for
+    /// `repo_id`, or `None` when no scan has been persisted.
+    pub fn tool_build_scanned_at(&self, repo_id: &str) -> Result<Option<String>> {
+        let conn = self.connect()?;
+        conn.query_row(
+            "SELECT MAX(created_at) FROM codegraph_tool_build_clusters WHERE repo_id = ?1",
+            params![repo_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .map_err(|e| CodeGraphError::Storage(e.to_string()))
+    }
+
+    /// Group the persisted clusters for `repo_id` into pattern families.
+    /// Families are computed on read (a pure function of the cluster rows),
+    /// so they can never go stale against the persisted clusters.
+    pub fn tool_build_families(
+        &self,
+        repo_id: Option<&str>,
+        limit: usize,
+        include_ignored: bool,
+    ) -> Result<Vec<crate::tool_build::ToolBuildClusterFamily>> {
+        let clusters = self.tool_build_clusters(repo_id, limit, include_ignored)?;
+        Ok(crate::tool_build::group_pattern_families(&clusters))
+    }
+
+    /// Inherit ignore feedback recorded against pre-merge window cluster ids
+    /// onto the merged clusters that absorbed them, so an operator's earlier
+    /// "not a lead" verdict survives overlap merging. Returns how many merged
+    /// clusters gained an inherited ignore.
+    pub fn propagate_ignores_to_merged(&self, clusters: &[ToolBuildCluster]) -> Result<usize> {
+        let conn = self.connect()?;
+        let mut inherited = 0usize;
+        for cluster in clusters {
+            if cluster.member_cluster_ids.is_empty() || cluster.ignored.is_some() {
+                continue;
+            }
+            for member_id in &cluster.member_cluster_ids {
+                if member_id == &cluster.cluster_id {
+                    continue;
+                }
+                let existing: Option<(String, String)> = conn
+                    .query_row(
+                        "SELECT reason, ignored_by FROM codegraph_tool_build_ignores \
+                         WHERE cluster_id = ?1",
+                        params![member_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map(Some)
+                    .or_else(|error| match error {
+                        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                        other => Err(CodeGraphError::Storage(other.to_string())),
+                    })?;
+                let Some((reason, ignored_by)) = existing else {
+                    continue;
+                };
+                let changed = conn
+                    .execute(
+                        "INSERT OR IGNORE INTO codegraph_tool_build_ignores \
+                         (cluster_id, reason, ignored_by, ignored_at) VALUES (?1, ?2, ?3, ?4)",
+                        params![
+                            cluster.cluster_id,
+                            format!("inherited: {member_id}: {reason}"),
+                            ignored_by,
+                            epoch_millis(),
+                        ],
+                    )
+                    .map_err(|e| CodeGraphError::Storage(e.to_string()))?;
+                if changed > 0 {
+                    inherited += 1;
+                }
+                break;
+            }
+        }
+        Ok(inherited)
+    }
+
     /// Returns the on-disk path of this store.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+/// One-time, shape-detected rebuild of `codegraph_tool_build_clusters` from
+/// the v3 `PRIMARY KEY (cluster_id)` shape to the v4 composite
+/// `PRIMARY KEY (repo_id, cluster_id)` shape (with category/member columns).
+/// Without this, a `system/host` scan would steal rows from the
+/// `family/jeryu-split` scan: the same window fingerprint yields the same
+/// cluster_id in both, and `INSERT OR REPLACE` on a single-column PK
+/// overwrites the other scan's row. No-op on already-migrated and fresh DBs.
+fn migrate_tool_build_clusters(conn: &Connection) -> Result<()> {
+    let sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' \
+             AND name = 'codegraph_tool_build_clusters'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| CodeGraphError::Storage(e.to_string()))?;
+    if sql.contains("PRIMARY KEY (repo_id, cluster_id)") {
+        return Ok(());
+    }
+    conn.execute_batch(
+        r#"
+BEGIN;
+CREATE TABLE codegraph_tool_build_clusters_v4 (
+    cluster_id         TEXT NOT NULL,
+    repo_id            TEXT NOT NULL,
+    commit_sha         TEXT NOT NULL,
+    fingerprint        TEXT NOT NULL,
+    score              INTEGER NOT NULL,
+    occurrence_count   INTEGER NOT NULL,
+    repo_count         INTEGER NOT NULL,
+    file_count         INTEGER NOT NULL,
+    total_lines        INTEGER NOT NULL,
+    language           TEXT NOT NULL,
+    insight            TEXT NOT NULL,
+    normalized_preview TEXT NOT NULL,
+    occurrences_json   TEXT NOT NULL,
+    created_at         TEXT NOT NULL,
+    category           TEXT NOT NULL DEFAULT 'tool-candidate',
+    member_cluster_ids_json TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (repo_id, cluster_id)
+);
+INSERT INTO codegraph_tool_build_clusters_v4
+    (cluster_id, repo_id, commit_sha, fingerprint, score, occurrence_count,
+     repo_count, file_count, total_lines, language, insight, normalized_preview,
+     occurrences_json, created_at)
+  SELECT cluster_id, repo_id, commit_sha, fingerprint, score, occurrence_count,
+     repo_count, file_count, total_lines, language, insight, normalized_preview,
+     occurrences_json, created_at
+  FROM codegraph_tool_build_clusters;
+DROP TABLE codegraph_tool_build_clusters;
+ALTER TABLE codegraph_tool_build_clusters_v4 RENAME TO codegraph_tool_build_clusters;
+CREATE INDEX IF NOT EXISTS idx_codegraph_tool_build_clusters_rank
+ON codegraph_tool_build_clusters (repo_id, score DESC, occurrence_count DESC);
+COMMIT;
+"#,
+    )
+    .map_err(|e| CodeGraphError::Storage(e.to_string()))
 }
 
 fn collect_rows<T, F>(rows: rusqlite::MappedRows<'_, F>) -> Result<Vec<T>>
@@ -842,9 +991,13 @@ fn tool_build_cluster_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Tool
     let occurrences_json: String = row.get(12)?;
     let occurrences =
         serde_json::from_str(&occurrences_json).map_err(|error| sqlite_json_error(12, error))?;
-    let reason: Option<String> = row.get(13)?;
-    let ignored_by: Option<String> = row.get(14)?;
-    let ignored_at: Option<String> = row.get(15)?;
+    let category_label: String = row.get(13)?;
+    let member_ids_json: String = row.get(14)?;
+    let member_cluster_ids: Vec<String> =
+        serde_json::from_str(&member_ids_json).map_err(|error| sqlite_json_error(14, error))?;
+    let reason: Option<String> = row.get(15)?;
+    let ignored_by: Option<String> = row.get(16)?;
+    let ignored_at: Option<String> = row.get(17)?;
     let cluster_id: String = row.get(0)?;
     let ignored = match (reason, ignored_by, ignored_at) {
         (Some(reason), Some(ignored_by), Some(ignored_at)) => Some(ToolBuildIgnore {
@@ -868,6 +1021,8 @@ fn tool_build_cluster_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Tool
         language: row.get(9)?,
         insight: row.get(10)?,
         normalized_preview: row.get(11)?,
+        category: crate::tool_build::ToolBuildCategory::from_label(&category_label),
+        member_cluster_ids,
         occurrences,
         ignored,
     })

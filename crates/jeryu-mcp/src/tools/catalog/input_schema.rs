@@ -342,6 +342,14 @@ pub(super) fn tool_input_schema(action_id: &str) -> Option<Value> {
                 ("include_ignored", serde_json::json!({"type": "boolean"})),
             ],
         ),
+        "tool_finder.scan" => object_schema(&[], &[]),
+        "tool_finder.dashboard" => object_schema(
+            &[],
+            &[
+                ("limit", integer_schema()),
+                ("include_ignored", serde_json::json!({"type": "boolean"})),
+            ],
+        ),
         "tool_registry.summary" => object_schema(&[], &[]),
         "codegraph.tool_build.feedback" => object_schema(
             &["cluster_id", "reason"],

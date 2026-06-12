@@ -32,7 +32,12 @@ pub use storage::{
     CodeGraphStore, CrateDepRow, FileRow, GovernanceRow, GraphSnapshot, IndexRunRow, SCHEMA,
     SymbolRefRow, SymbolRow, default_db_path,
 };
+pub use tool_build::enrich::{
+    ClusterEnrichment, anticipated_loc_saved, enrich_cluster, suggested_kind,
+};
 pub use tool_build::{
-    ToolBuildCluster, ToolBuildIgnore, ToolBuildOccurrence, ToolBuildScanConfig,
-    ToolBuildScanReport, scan_tool_build_clusters, scan_tool_build_family,
+    ToolBuildCategory, ToolBuildCluster, ToolBuildClusterFamily, ToolBuildIgnore,
+    ToolBuildOccurrence, ToolBuildScanConfig, ToolBuildScanOptions, ToolBuildScanPhase,
+    ToolBuildScanProgress, ToolBuildScanReport, discover_system_repo_roots, group_pattern_families,
+    scan_tool_build_clusters, scan_tool_build_family, scan_tool_build_system,
 };

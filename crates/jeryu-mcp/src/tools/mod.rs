@@ -50,6 +50,8 @@ pub(crate) const CATALOG: &[&str] = &[
     "codegraph.tool_build.clusters",
     "codegraph.tool_build.feedback",
     "tool_finder.clusters",
+    "tool_finder.scan",
+    "tool_finder.dashboard",
     "tool_registry.summary",
     "control_plane.status",
     "control_plane.priorities",

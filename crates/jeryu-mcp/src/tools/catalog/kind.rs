@@ -43,6 +43,8 @@ pub(crate) enum ToolKind {
     CodegraphToolBuildStatus,
     CodegraphToolBuildClusters,
     CodegraphToolBuildFeedback,
+    ToolFinderScan,
+    ToolFinderDashboard,
     ControlPlaneStatus,
     ControlPlanePriorities,
     RepoGraphClusters,
@@ -246,10 +248,7 @@ impl ToolDefinition {
             ToolKind::CodegraphQuery => serde_json::json!({
                 "repo": opt_s("repo"),
                 "ref": opt_s("ref"),
-                "changed_paths": match args.get("changed_paths").and_then(parse_string_array) {
-                    Some(paths) => paths,
-                    None => Vec::new(),
-                },
+                "changed_paths": args.get("changed_paths").and_then(parse_string_array).unwrap_or_default(),
                 "intent": opt_s("intent"),
                 "question": opt_s("question"),
                 "symbol": opt_s("symbol"),
@@ -275,6 +274,14 @@ impl ToolDefinition {
                     Some(ignored_by) => ignored_by,
                     None => "mcp".to_string(),
                 },
+            }),
+            ToolKind::ToolFinderScan => serde_json::json!({}),
+            ToolKind::ToolFinderDashboard => serde_json::json!({
+                "limit": args.get("limit").and_then(Value::as_i64),
+                "include_ignored": args
+                    .get("include_ignored")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             }),
             ToolKind::ControlPlaneStatus => serde_json::json!({}),
             ToolKind::ControlPlanePriorities => serde_json::json!({
