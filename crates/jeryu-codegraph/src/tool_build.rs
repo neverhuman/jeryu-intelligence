@@ -26,6 +26,15 @@ pub struct ToolBuildScanConfig {
     pub max_file_bytes: u64,
     /// Max ranked clusters returned to callers.
     pub max_clusters: usize,
+    /// Minimum distinct repos a cluster must span to be returned. The single-root
+    /// scan leaves this at `1`; the family scan raises it to `2` to surface only
+    /// windows that repeat across more than one repo.
+    #[serde(default = "default_min_repo_count")]
+    pub min_repo_count: usize,
+}
+
+fn default_min_repo_count() -> usize {
+    1
 }
 
 impl Default for ToolBuildScanConfig {
@@ -36,6 +45,7 @@ impl Default for ToolBuildScanConfig {
             min_occurrences: 2,
             max_file_bytes: 512 * 1024,
             max_clusters: 50,
+            min_repo_count: 1,
         }
     }
 }
@@ -139,6 +149,7 @@ struct ClusterBuilder {
     total_lines: usize,
     token_total: usize,
     files: BTreeSet<String>,
+    repos: BTreeSet<String>,
     languages: BTreeMap<String, usize>,
     occurrences: Vec<ToolBuildOccurrence>,
 }
@@ -149,6 +160,7 @@ impl ClusterBuilder {
         self.total_lines += window_lines;
         self.token_total += occurrence.normalized_token_count;
         self.files.insert(occurrence.path.clone());
+        self.repos.insert(occurrence.repo_id.clone());
         *self
             .languages
             .entry(occurrence.language.clone())
@@ -184,7 +196,7 @@ impl ClusterBuilder {
             fingerprint: self.fingerprint,
             score,
             occurrence_count: self.occurrence_count,
-            repo_count: 1,
+            repo_count: self.repos.len().max(1),
             file_count,
             total_lines: self.total_lines,
             language,
@@ -206,13 +218,88 @@ pub fn scan_tool_build_clusters(
     let root = root.as_ref();
     let repo_id = repo_id.into();
     let commit_sha = commit_sha.into();
+    let mut clusters: BTreeMap<String, ClusterBuilder> = BTreeMap::new();
+    let mut scanned_files = 0;
+    let mut skipped_files = 0;
+    accumulate_root(
+        root,
+        &repo_id,
+        &commit_sha,
+        &config,
+        &mut clusters,
+        &mut scanned_files,
+        &mut skipped_files,
+    )?;
+    let clusters = finalize_clusters(clusters, &repo_id, &commit_sha, &config);
+    Ok(ToolBuildScanReport {
+        repo_id,
+        commit_sha,
+        root: root.display().to_string(),
+        scanned_at: epoch_millis(),
+        scanned_files,
+        skipped_files,
+        clusters,
+    })
+}
+
+/// Scan every `(repo_id, root)` pair into one shared fingerprint index so a
+/// normalized window that appears in more than one repo collapses into a single
+/// cross-repo cluster (`repo_count >= 2`). This is the tool-finder hot path:
+/// set `config.min_repo_count = 2` to keep only windows that repeat across
+/// repos — the leads worth extracting into a shared tool. The cluster rows are
+/// labelled with `family_repo_id` (e.g. `family/jeryu-split`) while each
+/// occurrence keeps its own `repo_id`, so a dossier can point at exact files.
+pub fn scan_tool_build_family(
+    roots: &[(String, PathBuf)],
+    family_repo_id: impl Into<String>,
+    commit_sha: impl Into<String>,
+    config: ToolBuildScanConfig,
+) -> Result<ToolBuildScanReport> {
+    let family_repo_id = family_repo_id.into();
+    let commit_sha = commit_sha.into();
+    let mut clusters: BTreeMap<String, ClusterBuilder> = BTreeMap::new();
+    let mut scanned_files = 0;
+    let mut skipped_files = 0;
+    let mut scanned_repos = Vec::with_capacity(roots.len());
+    for (repo_id, root) in roots {
+        accumulate_root(
+            root,
+            repo_id,
+            &commit_sha,
+            &config,
+            &mut clusters,
+            &mut scanned_files,
+            &mut skipped_files,
+        )?;
+        scanned_repos.push(repo_id.clone());
+    }
+    let clusters = finalize_clusters(clusters, &family_repo_id, &commit_sha, &config);
+    Ok(ToolBuildScanReport {
+        repo_id: family_repo_id,
+        commit_sha,
+        root: scanned_repos.join(","),
+        scanned_at: epoch_millis(),
+        scanned_files,
+        skipped_files,
+        clusters,
+    })
+}
+
+/// Walk one root, fingerprint its normalized windows, and fold each occurrence
+/// into the shared `clusters` index keyed by fingerprint. Sharing the index
+/// across roots is what lets a window seen in two repos become one cluster.
+fn accumulate_root(
+    root: &Path,
+    repo_id: &str,
+    commit_sha: &str,
+    config: &ToolBuildScanConfig,
+    clusters: &mut BTreeMap<String, ClusterBuilder>,
+    scanned_files: &mut usize,
+    skipped_files: &mut usize,
+) -> Result<()> {
     let mut files = Vec::new();
     collect_source_files(root, root, &mut files)?;
     files.sort();
-
-    let mut scanned_files = 0;
-    let mut skipped_files = 0;
-    let mut clusters: BTreeMap<String, ClusterBuilder> = BTreeMap::new();
     let window_lines = config.window_lines.max(2);
 
     for path in files {
@@ -221,14 +308,14 @@ pub fn scan_tool_build_clusters(
             source,
         })?;
         if metadata.len() > config.max_file_bytes {
-            skipped_files += 1;
+            *skipped_files += 1;
             continue;
         }
         let Ok(contents) = std::fs::read_to_string(&path) else {
-            skipped_files += 1;
+            *skipped_files += 1;
             continue;
         };
-        scanned_files += 1;
+        *scanned_files += 1;
         let relative = repo_relative(root, &path);
         let language = language_for_path(&path);
         let normalized = normalized_lines(&contents);
@@ -254,8 +341,8 @@ pub fn scan_tool_build_clusters(
                 .map(|line| line.line_number)
                 .unwrap_or(start_line);
             let occurrence = ToolBuildOccurrence {
-                repo_id: repo_id.clone(),
-                commit_sha: commit_sha.clone(),
+                repo_id: repo_id.to_string(),
+                commit_sha: commit_sha.to_string(),
                 path: relative.clone(),
                 start_line,
                 end_line,
@@ -271,17 +358,32 @@ pub fn scan_tool_build_clusters(
                     total_lines: 0,
                     token_total: 0,
                     files: BTreeSet::new(),
+                    repos: BTreeSet::new(),
                     languages: BTreeMap::new(),
                     occurrences: Vec::new(),
                 })
                 .push(occurrence, window_lines);
         }
     }
+    Ok(())
+}
 
+/// Rank, filter, and cap the accumulated cluster builders. `min_repo_count`
+/// drops single-repo windows for the family scan; the single-root scan leaves
+/// it at `1` so its output is unchanged.
+fn finalize_clusters(
+    clusters: BTreeMap<String, ClusterBuilder>,
+    repo_id: &str,
+    commit_sha: &str,
+    config: &ToolBuildScanConfig,
+) -> Vec<ToolBuildCluster> {
+    let min_occurrences = config.min_occurrences.max(2);
+    let min_repo_count = config.min_repo_count.max(1);
     let mut clusters: Vec<_> = clusters
         .into_values()
-        .filter(|cluster| cluster.occurrence_count >= config.min_occurrences.max(2))
-        .map(|cluster| cluster.into_cluster(&repo_id, &commit_sha))
+        .filter(|cluster| cluster.occurrence_count >= min_occurrences)
+        .filter(|cluster| cluster.repos.len() >= min_repo_count)
+        .map(|cluster| cluster.into_cluster(repo_id, commit_sha))
         .collect();
     clusters.sort_by(|a, b| {
         b.score
@@ -290,16 +392,7 @@ pub fn scan_tool_build_clusters(
             .then_with(|| a.cluster_id.cmp(&b.cluster_id))
     });
     clusters.truncate(config.max_clusters.max(1));
-
-    Ok(ToolBuildScanReport {
-        repo_id,
-        commit_sha,
-        root: root.display().to_string(),
-        scanned_at: epoch_millis(),
-        scanned_files,
-        skipped_files,
-        clusters,
-    })
+    clusters
 }
 
 fn collect_source_files(root: &Path, current: &Path, out: &mut Vec<PathBuf>) -> Result<()> {

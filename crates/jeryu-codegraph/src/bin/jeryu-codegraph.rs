@@ -7,9 +7,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use jeryu_codegraph::{
     CodeGraph, CodeGraphQuery, CodeGraphRepoIdentity, CodeGraphService, CodeGraphStore, Slice,
-    ToolBuildScanConfig, scan_tool_build_clusters,
+    ToolBuildScanConfig, scan_tool_build_clusters, scan_tool_build_family,
 };
 use jeryu_rustjet::WorkspaceGraph;
+use serde::Deserialize;
 
 #[derive(Parser)]
 #[command(
@@ -112,6 +113,40 @@ enum ToolBuildCommands {
         /// Minimum occurrences before a fingerprint becomes a cluster.
         #[arg(long, default_value_t = 2)]
         min_occurrences: usize,
+        /// Maximum clusters to persist/return.
+        #[arg(long, default_value_t = 50)]
+        top: usize,
+        /// Emit full JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Scan EVERY repo in a split manifest into one shared index so windows
+    /// repeated across more than one repo collapse into cross-repo clusters.
+    /// This is the tool-finder hot path: the leads worth extracting into a
+    /// shared tool. Persisted under the synthetic `--repo-id` (default
+    /// `family/jeryu-split`).
+    ScanFamily {
+        /// Path to repos.manifest.toml listing the family `[[repo]]` roots.
+        #[arg(long)]
+        manifest: PathBuf,
+        /// SQLite database path (defaults to ~/.local/share/jeryu/codegraph.sqlite).
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Synthetic repo id for the persisted cross-repo cluster rows.
+        #[arg(long, default_value = "family/jeryu-split")]
+        repo_id: String,
+        /// Commit/ref label for persisted cluster rows.
+        #[arg(long, default_value = "working-tree")]
+        commit: String,
+        /// Number of normalized non-empty lines per fingerprinted window.
+        #[arg(long, default_value_t = 8)]
+        window_lines: usize,
+        /// Minimum occurrences before a fingerprint becomes a cluster.
+        #[arg(long, default_value_t = 2)]
+        min_occurrences: usize,
+        /// Minimum distinct repos a cluster must span to be kept.
+        #[arg(long, default_value_t = 2)]
+        min_repos: usize,
         /// Maximum clusters to persist/return.
         #[arg(long, default_value_t = 50)]
         top: usize,
@@ -325,6 +360,63 @@ fn main() -> Result<()> {
                     }
                 }
             }
+            ToolBuildCommands::ScanFamily {
+                manifest,
+                db,
+                repo_id,
+                commit,
+                window_lines,
+                min_occurrences,
+                min_repos,
+                top,
+                json,
+            } => {
+                let store = CodeGraphStore::open(resolve_db(db)?).context("open store")?;
+                let roots = manifest_repo_roots(&manifest)
+                    .with_context(|| format!("read repo roots from {}", manifest.display()))?;
+                if roots.is_empty() {
+                    anyhow::bail!("{} lists no repo roots to scan", manifest.display());
+                }
+                let report = scan_tool_build_family(
+                    &roots,
+                    repo_id,
+                    commit,
+                    ToolBuildScanConfig {
+                        window_lines,
+                        min_occurrences,
+                        min_repo_count: min_repos,
+                        max_clusters: top,
+                        ..ToolBuildScanConfig::default()
+                    },
+                )
+                .context("scan tool-build family clusters")?;
+                store
+                    .persist_tool_build_report(&report)
+                    .context("persist tool-build family clusters")?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!(
+                        "tool-build family scan: repos={} files={} skipped={} cross-repo-clusters={} -> {}",
+                        roots.len(),
+                        report.scanned_files,
+                        report.skipped_files,
+                        report.clusters.len(),
+                        store.path().display()
+                    );
+                    for cluster in &report.clusters {
+                        println!(
+                            "  {} score={} repos={} occurrences={} files={} {}",
+                            cluster.cluster_id,
+                            cluster.score,
+                            cluster.repo_count,
+                            cluster.occurrence_count,
+                            cluster.file_count,
+                            cluster.insight
+                        );
+                    }
+                }
+            }
             ToolBuildCommands::Clusters {
                 db,
                 repo_id,
@@ -379,6 +471,46 @@ fn main() -> Result<()> {
         },
     }
     Ok(())
+}
+
+/// Minimal view of `repos.manifest.toml`: just enough to drive a family scan.
+/// We deliberately parse only `[[repo]].path`/`name` so the codegraph binary
+/// stays decoupled from the full split-manifest schema owned by jeryu-deploy.
+#[derive(Debug, Deserialize)]
+struct SplitManifest {
+    #[serde(default)]
+    repo: Vec<SplitManifestRepo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SplitManifestRepo {
+    path: String,
+    name: Option<String>,
+}
+
+/// Read the `(repo_id, root)` pairs to feed the family scan. `repo_id` is the
+/// repo `name` (falling back to the directory name); roots that do not exist on
+/// disk are skipped so a partially-cloned family still scans cleanly.
+fn manifest_repo_roots(manifest: &PathBuf) -> Result<Vec<(String, PathBuf)>> {
+    let text = std::fs::read_to_string(manifest)
+        .with_context(|| format!("read {}", manifest.display()))?;
+    let parsed: SplitManifest = toml::from_str(&text)
+        .with_context(|| format!("parse {} as a split manifest", manifest.display()))?;
+    let mut roots = Vec::new();
+    for repo in parsed.repo {
+        let path = PathBuf::from(&repo.path);
+        if !path.is_dir() {
+            continue;
+        }
+        let repo_id = repo.name.clone().unwrap_or_else(|| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("repo")
+                .to_string()
+        });
+        roots.push((repo_id, path));
+    }
+    Ok(roots)
 }
 
 fn split_csv(value: &str) -> Vec<String> {

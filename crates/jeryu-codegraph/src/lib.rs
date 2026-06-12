@@ -34,5 +34,5 @@ pub use storage::{
 };
 pub use tool_build::{
     ToolBuildCluster, ToolBuildIgnore, ToolBuildOccurrence, ToolBuildScanConfig,
-    ToolBuildScanReport, scan_tool_build_clusters,
+    ToolBuildScanReport, scan_tool_build_clusters, scan_tool_build_family,
 };

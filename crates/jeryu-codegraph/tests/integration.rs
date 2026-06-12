@@ -6,6 +6,7 @@ use jeryu_codegraph::{
     CodeGraph, CodeGraphQuery, CodeGraphRepoIdentity, CodeGraphService, CodeGraphStore,
     CodegraphQuery, CrateDepRow, GraphSnapshot, Slice, SymbolRefRow, SymbolRow,
     ToolBuildScanConfig, enforce_export_slice_from_diff, query_store, scan_tool_build_clusters,
+    scan_tool_build_family,
 };
 
 fn unique_db(tag: &str) -> PathBuf {
@@ -220,6 +221,7 @@ pub fn alpha_retry(input: &str) -> Result<String, String> {
         min_occurrences: 2,
         max_file_bytes: 64 * 1024,
         max_clusters: 10,
+        min_repo_count: 1,
     };
     let report = scan_tool_build_clusters(&root, "local/jeryu", "commit-a", config).unwrap();
     assert_eq!(report.scanned_files, 2);
@@ -261,6 +263,77 @@ pub fn alpha_retry(input: &str) -> Result<String, String> {
 
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn tool_build_family_scan_merges_clusters_across_repos() {
+    // The same normalized window lives in two SEPARATE repo roots. The family
+    // scan must fold both occurrences into ONE cluster spanning both repos.
+    let repeated = r#"
+pub fn alpha_retry(input: &str) -> Result<String, String> {
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let response = call_remote(input);
+        if response.is_ok() {
+            return response;
+        }
+        if attempts > 3 {
+            return Err("failed".to_string());
+        }
+    }
+}
+"#;
+    let repo_a = unique_dir("tool-build-family-a");
+    let repo_b = unique_dir("tool-build-family-b");
+    write_file(&repo_a, "crates/a/src/lib.rs", repeated);
+    // Rename the identifier so only the NORMALIZED window matches — this proves
+    // the merge keys on the fingerprint, not on raw text.
+    write_file(
+        &repo_b,
+        "crates/b/src/lib.rs",
+        &repeated.replace("alpha_retry", "beta_retry"),
+    );
+    let config = ToolBuildScanConfig {
+        window_lines: 5,
+        min_normalized_tokens: 12,
+        min_occurrences: 2,
+        max_file_bytes: 64 * 1024,
+        max_clusters: 10,
+        min_repo_count: 2,
+    };
+    let roots = vec![
+        ("local/repo-a".to_string(), repo_a.clone()),
+        ("local/repo-b".to_string(), repo_b.clone()),
+    ];
+    let report =
+        scan_tool_build_family(&roots, "family/jeryu-split", "working-tree", config).unwrap();
+    assert_eq!(report.repo_id, "family/jeryu-split");
+    assert_eq!(report.scanned_files, 2);
+
+    let cross_repo = report
+        .clusters
+        .iter()
+        .find(|cluster| cluster.repo_count >= 2)
+        .expect("expected a cross-repo cluster spanning both roots");
+    assert_eq!(cross_repo.repo_count, 2);
+    let repos: std::collections::BTreeSet<&str> = cross_repo
+        .occurrences
+        .iter()
+        .map(|occ| occ.repo_id.as_str())
+        .collect();
+    assert!(repos.contains("local/repo-a"));
+    assert!(repos.contains("local/repo-b"));
+
+    // Every surviving cluster must satisfy the min_repo_count=2 filter: a window
+    // that lived in only one repo must NOT be returned by the family scan.
+    assert!(
+        report.clusters.iter().all(|cluster| cluster.repo_count >= 2),
+        "family scan must drop single-repo clusters when min_repo_count=2"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_a);
+    let _ = std::fs::remove_dir_all(&repo_b);
 }
 
 #[test]
