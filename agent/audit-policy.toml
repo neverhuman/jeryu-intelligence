@@ -1,5 +1,5 @@
 schema_version = "1.0.0"
-workspace = "jeryu-tool-finder"
+workspace = "jeryu-intelligence"
 # rust-workspace profile: a single all-Rust binary (src/) consuming the
 # jeryu-codegraph engine as a pinned-tag library, plus the ops/ CI gate.
 #
