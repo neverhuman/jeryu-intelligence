@@ -17,5 +17,7 @@ security:
 artifact-support:
   ./ops/ci/artifact_support.sh
 
+release-readiness: fast check score security artifact-support
+
 profile:
   printf '%s\n' "rust-workspace"
