@@ -180,6 +180,16 @@
       "lane": "check",
       "purpose": "verify documented data boundary policy remains routed"
     },
+    "contracts/": {
+      "command": "just check && just score",
+      "lane": "check",
+      "purpose": "verify codegraph contract schema remains routed"
+    },
+    "contracts/codegraph.schema.json": {
+      "command": "just check && just score",
+      "lane": "check",
+      "purpose": "verify codegraph contract schema remains routed"
+    },
     "ops/": {
       "command": "just fast && just check && just score",
       "lane": "ci",

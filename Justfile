@@ -5,7 +5,9 @@ export CARGO_TERM_COLOR := "always"
 jobs := env_var_or_default("JERYU_CI_JOBS", "40")
 
 fast:
-  ./ops/ci/fast.sh # cargo check
+  cargo check -p jeryu-codegraph
+  cargo nextest run -p jeryu-codegraph --lib
+  ./ops/ci/fast.sh
 
 check:
   ./ops/ci/check.sh

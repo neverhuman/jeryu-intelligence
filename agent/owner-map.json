@@ -36,7 +36,9 @@
     "scripts/": "ops",
     "tests/": "tests",
     "agent/tool-adoption.toml": "agent",
-    "db/": "jeryu-intelligence"
+    "db/": "jeryu-intelligence",
+    "contracts/": "jeryu-intelligence",
+    "contracts/codegraph.schema.json": "jeryu-intelligence"
   },
   "workspace": "jeryu-intelligence"
 }
