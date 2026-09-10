@@ -1,0 +1,15 @@
+schema_version = "1.0.0"
+workspace = "jeryu-intelligence"
+# Candidate admission requires at least 85 with zero hard findings and caps.
+# Full scans and stricter governing proof or ratchet requirements remain required.
+minimum_score = 85
+hard_findings_allowed = 0
+required_tool = "jankurai"
+required_tool_version = "1.6.11"
+
+[scan]
+excluded_paths = [
+  ".jankurai/",
+  "dossiers/",   # generated cluster dossiers; produced by just scan + just dossier
+  "target/",     # cargo build output
+]
