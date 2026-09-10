@@ -1,4 +1,6 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+export CARGO_INCREMENTAL := "1"
+export CARGO_TERM_COLOR := "always"
 
 jobs := env_var_or_default("JERYU_CI_JOBS", "40")
 

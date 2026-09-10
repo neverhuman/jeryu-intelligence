@@ -1,6 +1,20 @@
 # jeryu-intelligence
 
+<!-- jankurai-badge:start -->
+[![Jankurai score](agent/jankurai-badge.svg)](.jankurai/repo-score.md)
+<!-- jankurai-badge:end -->
+
 Codegraph, RustJet, MCP intelligence, review, and autonomy analysis.
+Agents start at **[AGENTS.md](AGENTS.md)**.
+
+## Quick start
+
+```bash
+git clone https://github.com/neverhuman/jeryu-intelligence.git
+cd jeryu-intelligence
+just check
+just score
+```
 
 This repository was seeded from Jeryu source commit `cbecf7caa0e932c76a341b2521e66e911233860d` by
 `ops/split/materialize.py`. It is part of the seven-repo Jeryu split family and keeps source

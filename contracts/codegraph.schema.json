@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/neverhuman/jeryu-intelligence/contracts/codegraph.schema.json",
+  "title": "Codegraph symbol row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["crate", "file", "symbol", "kind", "is_public", "line"],
+  "properties": {
+    "crate": { "type": "string", "minLength": 1 },
+    "file": { "type": "string", "minLength": 1 },
+    "symbol": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "minLength": 1 },
+    "is_public": { "type": "boolean" },
+    "line": { "type": "integer", "minimum": 0 }
+  }
+}

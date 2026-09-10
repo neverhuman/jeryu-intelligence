@@ -2,3 +2,8 @@
 path = ".jankurai/"
 generator = "just score"
 manual_edits = false
+
+[[zones]]
+path = "contracts/codegraph.schema.json"
+generator = "manual-schema"
+manual_edits = true
