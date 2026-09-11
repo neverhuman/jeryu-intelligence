@@ -2,12 +2,19 @@
 set -euo pipefail
 
 source ops/ci/lib.sh
-if [[ -f Cargo.toml ]]; then
-  cargo metadata --format-version 1 --no-deps >/dev/null
-  if [[ "${JERYU_SPLIT_FULL_CHECK:-0}" == "1" ]]; then
-    cargo check --workspace --all-targets --jobs "${JERYU_CI_JOBS:-40}"
+bash ops/ci/test-governed-jankurai-path.sh
+# shellcheck source=ops/ci/cargo-scope.sh
+source ops/ci/cargo-scope.sh
+if [[ "${JERYU_SPLIT_FULL_CHECK:-0}" == "1" ]]; then
+  check_scope=(--workspace)
+  if [[ $component_root != "$git_root" ]]; then
+    check_scope=()
+    for package in "${owned_packages[@]}"; do check_scope+=(--package "$package"); done
   fi
+  cargo check --locked --manifest-path "$member_manifest" "${check_scope[@]}" \
+    --all-targets --jobs "${JERYU_CI_JOBS:-40}"
 fi
+# End Cargo ownership check.
 
 if [[ -f package.json ]]; then
   node -e 'JSON.parse(require("fs").readFileSync("package.json", "utf8"))' >/dev/null
