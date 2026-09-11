@@ -191,3 +191,17 @@ require_jankurai() {
   fi
   export JANKURAI_NO_UPDATE_CHECK=1 GIT_TERMINAL_PROMPT=0
 }
+
+# Public GitHub checkouts have no closed vendor. Host stays --offline.
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  cargo() {
+    local -a args=()
+    local arg
+    for arg in "$@"; do
+      [[ "$arg" == --offline ]] && continue
+      args+=("$arg")
+    done
+    command cargo "${args[@]}"
+  }
+  export -f cargo
+fi

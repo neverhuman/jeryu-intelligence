@@ -8,5 +8,7 @@ jankurai audit . --full --mode standard --no-score-history \
   --fail-on critical,high \
   --json .jankurai/repo-score.json \
   --md .jankurai/repo-score.md
+# Generate first: --check alone fails when the badge files were never committed.
+jankurai badge --update-readme
 jankurai badge --check --update-readme
 printf 'jankurai-score ok\n'
