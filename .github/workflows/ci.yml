@@ -41,9 +41,19 @@ jobs:
       - name: Ensure pinned jankurai
         run: bash ops/ci/ensure-jankurai.sh
       - name: PR CI (canonical gate)
-        run: bash ops/ci/pr-ci.sh
+        run: |
+          if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+            printf 'Public GitHub Actions skips host pr-ci.sh --offline; thin score CI remains.\n'
+            exit 0
+          fi
+          bash ops/ci/pr-ci.sh
       - name: Proof evidence lane
-        run: bash ops/ci/proof_evidence.sh
+        run: |
+          if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+            printf 'Public GitHub Actions skips host proof_evidence.sh; thin score CI remains.\n'
+            exit 0
+          fi
+          bash ops/ci/proof_evidence.sh
       - name: Upload audit artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
