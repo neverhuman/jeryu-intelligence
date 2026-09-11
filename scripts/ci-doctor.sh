@@ -1,3 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+# BEGIN GENERATED JANKURAI PIN — DO NOT EDIT
+export JERYU_JANKURAI_SOURCE_REPO="https://github.com/neverhuman/jankurai.git"
+export JERYU_JANKURAI_VERSION="jankurai 1.6.11"
+export JERYU_JANKURAI_SHA256="9e6b8857a26f6004d4c74e510e13b06d880f2e2ae0c89502698889ed690c5d6c"
+export JERYU_JANKURAI_SOURCE_REV="b88562fdb124aa86dedd70ab972e7d0d87e58be1"
+export JERYU_JANKURAI_SOURCE_TAG="v1.6.11-deadlang-precision-split.3"
+export JERYU_JANKURAI_SOURCE_TREE="611229e54938c0e8808896e369fd54d095d258f7"
+export JERYU_JANKURAI_SOURCE_ARCHIVE_SHA256="903a231eca8f6a1f050953b603d5a278a1606abcdf47434eb1b45262d74068aa"
+export JERYU_JANKURAI_CARGO_LOCK_SHA256="b9acb981c326226a687d0b6703e4f7ee303148e9e1a6dda1aa03d77988820f6a"
+export JERYU_JANKURAI_RUST_TOOLCHAIN="1.95.0"
+export JERYU_JANKURAI_RUSTC_VERSION="rustc 1.95.0 (59807616e 2026-04-14)"
+export JERYU_JANKURAI_CARGO_VERSION="cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
+export JERYU_JANKURAI_TARGET_TRIPLE="x86_64-unknown-linux-gnu"
+export JERYU_JANKURAI_BUILD_MODE="cargo-install-locked-offline-path-v1"
+# END GENERATED JANKURAI PIN
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ops/ci/lib.sh"
+require_jankurai
+
 just score

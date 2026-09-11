@@ -3,6 +3,23 @@
 # `jeryu-intelligence/required` check-run from its exit status; .github/workflows/ci.yml runs
 # the same lanes on the GitHub mirror so the two surfaces cannot diverge.
 set -euo pipefail
+
+# BEGIN GENERATED JANKURAI PIN — DO NOT EDIT
+export JERYU_JANKURAI_SOURCE_REPO="https://github.com/neverhuman/jankurai.git"
+export JERYU_JANKURAI_VERSION="jankurai 1.6.11"
+export JERYU_JANKURAI_SHA256="9e6b8857a26f6004d4c74e510e13b06d880f2e2ae0c89502698889ed690c5d6c"
+export JERYU_JANKURAI_SOURCE_REV="b88562fdb124aa86dedd70ab972e7d0d87e58be1"
+export JERYU_JANKURAI_SOURCE_TAG="v1.6.11-deadlang-precision-split.3"
+export JERYU_JANKURAI_SOURCE_TREE="611229e54938c0e8808896e369fd54d095d258f7"
+export JERYU_JANKURAI_SOURCE_ARCHIVE_SHA256="903a231eca8f6a1f050953b603d5a278a1606abcdf47434eb1b45262d74068aa"
+export JERYU_JANKURAI_CARGO_LOCK_SHA256="b9acb981c326226a687d0b6703e4f7ee303148e9e1a6dda1aa03d77988820f6a"
+export JERYU_JANKURAI_RUST_TOOLCHAIN="1.95.0"
+export JERYU_JANKURAI_RUSTC_VERSION="rustc 1.95.0 (59807616e 2026-04-14)"
+export JERYU_JANKURAI_CARGO_VERSION="cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
+export JERYU_JANKURAI_TARGET_TRIPLE="x86_64-unknown-linux-gnu"
+export JERYU_JANKURAI_BUILD_MODE="cargo-install-locked-offline-path-v1"
+# END GENERATED JANKURAI PIN
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
@@ -17,10 +34,9 @@ fi
 export JERYU_CI_JOBS="$JOBS"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$JOBS}"
 
-# The pinned jankurai 1.6.10 lives in ~/.cargo/bin; ~/.local/bin shadows it with
-# 1.5.1 on this host. Resolve the pinned auditor first so audit semantics cannot
-# drift mid-lane (see ops/ci/ensure-jankurai.sh).
-export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+# Resolve and verify the absolute governed auditor before any lane runs.
+source ops/ci/lib.sh
+require_jankurai
 
 # jankurai pin: jeryu-tool/tool-manifest.toml is the family-wide source of truth.
 # When the control-plane repo is reachable (on-host family layout), fail fast if
@@ -29,7 +45,9 @@ export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
 JERYU_TOOL_RENDER="${JERYU_TOOL_RENDER:-$repo_root/../jeryu-tool/ops/render-tool-manifest.sh}"
 if [ -x "$JERYU_TOOL_RENDER" ]; then
   echo "[pr-ci] jankurai pin drift check" >&2
-  bash "$JERYU_TOOL_RENDER" --check
+  consumer_repo="$(awk -F'\"' '/^workspace =/ {print $2; exit}' agent/audit-policy.toml)"
+  bash "$JERYU_TOOL_RENDER" --check --repo "$consumer_repo" \
+    --repo-root "$consumer_repo=$repo_root"
 fi
 
 echo "[pr-ci] (jobs=$JOBS) standard lanes" >&2

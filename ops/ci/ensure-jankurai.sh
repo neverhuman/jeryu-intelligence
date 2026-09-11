@@ -1,118 +1,190 @@
 #!/usr/bin/env bash
-# Install or verify the pinned Jankurai binary used by local and hosted gates.
+# GENERATED Jankurai verifier. Installation is owned only by jeryu-tool.
 set -euo pipefail
 
-JANKURAI_REPO="${JANKURAI_REPO:-https://github.com/neverhuman/jankurai.git}"
-JANKURAI_TAG="${JANKURAI_TAG:-v1.6.10-deadlang-precision}"
-JANKURAI_REV="${JANKURAI_REV:-68bd6114373cf407a930011b76669af306cb0cb1}"
-JANKURAI_VERSION="${JANKURAI_VERSION:-jankurai 1.6.10}"
-JERYU_JANKURAI_CLEAN_GIT_CONFIG="${JERYU_JANKURAI_CLEAN_GIT_CONFIG:-1}"
+# BEGIN GENERATED JANKURAI PIN — DO NOT EDIT
+export JERYU_JANKURAI_SOURCE_REPO="https://github.com/neverhuman/jankurai.git"
+export JERYU_JANKURAI_VERSION="jankurai 1.6.11"
+export JERYU_JANKURAI_SHA256="9e6b8857a26f6004d4c74e510e13b06d880f2e2ae0c89502698889ed690c5d6c"
+export JERYU_JANKURAI_SOURCE_REV="b88562fdb124aa86dedd70ab972e7d0d87e58be1"
+export JERYU_JANKURAI_SOURCE_TAG="v1.6.11-deadlang-precision-split.3"
+export JERYU_JANKURAI_SOURCE_TREE="611229e54938c0e8808896e369fd54d095d258f7"
+export JERYU_JANKURAI_SOURCE_ARCHIVE_SHA256="903a231eca8f6a1f050953b603d5a278a1606abcdf47434eb1b45262d74068aa"
+export JERYU_JANKURAI_CARGO_LOCK_SHA256="b9acb981c326226a687d0b6703e4f7ee303148e9e1a6dda1aa03d77988820f6a"
+export JERYU_JANKURAI_RUST_TOOLCHAIN="1.95.0"
+export JERYU_JANKURAI_RUSTC_VERSION="rustc 1.95.0 (59807616e 2026-04-14)"
+export JERYU_JANKURAI_CARGO_VERSION="cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
+export JERYU_JANKURAI_TARGET_TRIPLE="x86_64-unknown-linux-gnu"
+export JERYU_JANKURAI_BUILD_MODE="cargo-install-locked-offline-path-v1"
+# END GENERATED JANKURAI PIN
 
-jankurai_git() {
-  if [ "${JERYU_JANKURAI_CLEAN_GIT_CONFIG}" = "1" ]; then
-    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git "$@"
-  else
-    git "$@"
-  fi
-}
-
-jankurai_cargo_install() {
-  if [ "${JERYU_JANKURAI_CLEAN_GIT_CONFIG}" = "1" ]; then
-    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 cargo install "$@"
-  else
-    cargo install "$@"
-  fi
-}
-
-verify_pinned_rev_fetchable() {
-  local tmp
-  tmp="$(mktemp -d)"
-  if ! (
-    jankurai_git -C "${tmp}" init -q &&
-      jankurai_git -C "${tmp}" remote add origin "${JANKURAI_REPO}" &&
-      jankurai_git -C "${tmp}" fetch --depth 1 origin "${JANKURAI_REV}" >/dev/null 2>&1 &&
-      [ "$(jankurai_git -C "${tmp}" rev-parse FETCH_HEAD)" = "${JANKURAI_REV}" ]
-  ); then
-    rm -rf "${tmp}"
-    echo "jankurai pinned rev unavailable: ${JANKURAI_REV}" >&2
+require_jankurai() {
+  # Public GitHub Actions cannot hold the loopback governed receipt.
+  if [[ "${GITHUB_ACTIONS:-}" == "true" && "${JAIN_RELEASE_CI:-0}" != "1" ]]; then
+    local here resolved actual actual_sha ver sha
+    here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+    if [[ ! -x /usr/local/bin/jankurai ]]; then
+      bash "${here}/install-jankurai-release.sh"
+    fi
+    resolved="$(type -P -- jankurai 2>/dev/null || true)"
+    actual="$("${resolved:-:}" --version 2>/dev/null || true)"
+    actual_sha="$(sha256sum "${resolved:-/dev/null}" 2>/dev/null | awk '{print $1}')"
+    ver="${JERYU_JANKURAI_VERSION:-${JANKURAI_VERSION:-jankurai 1.6.11}}"
+    sha="${JERYU_JANKURAI_SHA256:-${JANKURAI_SHA256:-9e6b8857a26f6004d4c74e510e13b06d880f2e2ae0c89502698889ed690c5d6c}}"
+    if [[ "$resolved" == /* && -f "$resolved" && ! -L "$resolved" && -x "$resolved" &&
+          "$actual" == "$ver" && "$actual_sha" == "$sha" ]]; then
+      export JERYU_GOVERNED_JANKURAI_BIN="$resolved"
+      export PATH="$(dirname "$resolved"):${PATH}"
+      export JANKURAI_NO_UPDATE_CHECK=1 GIT_TERMINAL_PROMPT=0
+      return 0
+    fi
+    printf 'github-actions jankurai identity mismatch: path=%s version=%s sha256=%s\n' \
+      "${resolved:-missing}" "${actual:-missing}" "${actual_sha:-missing}" >&2
     exit 1
   fi
-  rm -rf "${tmp}"
-  echo "jankurai pinned rev ok: ${JANKURAI_REV}"
-}
-
-resolve_tag_rev() {
-  local refs
-  refs="$(jankurai_git ls-remote --tags "${JANKURAI_REPO}" \
-    "refs/tags/${JANKURAI_TAG}" "refs/tags/${JANKURAI_TAG}^{}")"
-  printf '%s\n' "${refs}" | awk -v direct="refs/tags/${JANKURAI_TAG}" -v peeled="refs/tags/${JANKURAI_TAG}^{}" '
-    $2 == peeled {
-      print $1
-      found = 1
-      exit
-    }
-    $2 == direct {
-      direct_rev = $1
-    }
-    END {
-      if (!found && direct_rev != "") {
-        print direct_rev
-      }
-    }
-  '
-}
-
-strict_tag="${JERYU_JANKURAI_STRICT_TAG:-}"
-if [ -z "${strict_tag}" ] && [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-  strict_tag=1
-fi
-
-if [ "${strict_tag:-0}" = "1" ]; then
-  raw_tag_rev="$(resolve_tag_rev)"
-  tag_rev="$(printf '%s\n' "${raw_tag_rev}" | tr -d '\r' | grep -Eo '^[0-9a-fA-F]{40}$' | head -n 1 || true)"
-  if [ -z "${tag_rev}" ]; then
-    echo "jankurai tag not published: ${JANKURAI_TAG}; verifying pinned rev ${JANKURAI_REV}"
-    verify_pinned_rev_fetchable
-  elif [ "${tag_rev}" != "${JANKURAI_REV}" ]; then
-    echo "jankurai tag differs: got ${tag_rev} want ${JANKURAI_REV}; verifying pinned rev" >&2
-    verify_pinned_rev_fetchable
+  local mode=receipt-bound
+  local expected_broker="/opt/jain-ci/authority/release-bin/jankurai"
+  local expected_governed="/home/ubuntu/.jeryu/bin/jankurai"
+  local bin bin_dir governed_root normalized resolved actual actual_sha receipt receipt_digest receipt_sha
+  local expected_test=false expected_verification=release-authoritative
+  local expected_governance=governed expected_protected=true
+  local expected_protection=immutable-main-v1 found_receipt=0
+  local -a receipt_candidates=()
+  if [[ "${JAIN_RELEASE_CI:-0}" == "1" ]]; then
+    mode=release-broker
+    resolved="$(command -v jankurai 2>/dev/null || true)"
+    if [[ "${resolved}" != "${expected_broker}" ]]; then
+      printf 'release broker Jankurai path mismatch: expected %s, resolved %s\n' \
+        "${expected_broker}" "${resolved:-missing}" >&2
+      exit 1
+    fi
+    bin="${resolved}"
   else
-    echo "jankurai tag ok: ${JANKURAI_TAG} -> ${JANKURAI_REV}"
+    bin="${JERYU_GOVERNED_JANKURAI_BIN:-${expected_governed}}"
   fi
-fi
-
-PINNED_BIN="${CARGO_HOME:-$HOME/.cargo}/bin/jankurai"
-
-# A stale jankurai earlier on PATH (e.g. a pooled cargo-home, ~/.local/bin) can
-# shadow the pinned ~/.cargo/bin build and make the gate silently audit with the
-# wrong version. Overwrite whatever `jankurai` resolves to with the pinned binary
-# whenever the resolved path is writable, so the gate never runs a wrong version.
-force_resolved_to_pin() {
-  local resolved
-  resolved="$(command -v jankurai 2>/dev/null || true)"
-  if [ -x "${PINNED_BIN}" ] && [ -n "${resolved}" ] &&
-    [ "${resolved}" != "${PINNED_BIN}" ] && [ -w "${resolved}" ]; then
-    install -m755 "${PINNED_BIN}" "${resolved}" 2>/dev/null || true
+  if [[ "${bin}" != /* || ! -f "${bin}" || -L "${bin}" || ! -x "${bin}" ]]; then
+    printf 'governed jankurai must be an absolute executable regular file: %s\n' "${bin}" >&2
+    exit 1
   fi
+  normalized="$(realpath -m "${bin}")"
+  if [[ "${normalized}" != "${bin}" ]]; then
+    printf 'governed jankurai path traverses a symlink: %s -> %s\n' "${bin}" "${normalized}" >&2
+    exit 1
+  fi
+  if [[ "${mode}" == "release-broker" &&
+        "$(stat -c '%a:%h' -- "${bin}" 2>/dev/null || true)" != "555:1" ]]; then
+    printf 'release broker Jankurai custody mismatch: expected mode 0555 and one link at %s\n' \
+      "${bin}" >&2
+    exit 1
+  fi
+  if [[ "${mode}" != "release-broker" ]]; then
+    bin_dir="$(dirname "${bin}")"
+    export PATH="${bin_dir}:${PATH}"
+    resolved="$(command -v jankurai 2>/dev/null || true)"
+    if [[ "${resolved}" != "${bin}" ]]; then
+      printf 'governed jankurai shadowed: expected %s, resolved %s\n' \
+        "${bin}" "${resolved:-missing}" >&2
+      exit 1
+    fi
+  fi
+  actual="$("${bin}" --version 2>/dev/null || true)"
+  actual_sha="$(sha256sum "${bin}" 2>/dev/null | awk '{print $1}')"
+  if [[ "${actual}" != "${JERYU_JANKURAI_VERSION}" ]] ||
+     [[ "${actual_sha}" != "${JERYU_JANKURAI_SHA256}" ]]; then
+    printf 'governed jankurai identity mismatch at %s: version=%s sha256=%s\n' \
+      "${bin}" "${actual:-missing}" "${actual_sha:-missing}" >&2
+    exit 1
+  fi
+  export JERYU_GOVERNED_JANKURAI_BIN="${bin}"
+  if [[ "${mode}" == "release-broker" ]]; then
+    if [[ -n "${JERYU_JANKURAI_RECEIPT:-}" ||
+          -n "${JERYU_JANKURAI_RECEIPT_SHA256:-}" ||
+          "${JERYU_JANKURAI_ALLOW_TEST_RECEIPT:-0}" != "0" ]]; then
+      printf 'release broker Jankurai rejects caller receipt authority\n' >&2
+      exit 1
+    fi
+    found_receipt=1
+  elif [[ "${JERYU_JANKURAI_ALLOW_TEST_RECEIPT:-0}" == "1" ]]; then
+    expected_test=true
+    expected_verification=diagnostic-candidate
+    expected_governance=diagnostic-candidate
+    expected_protected=false
+    expected_protection=not-applicable
+  fi
+  if [[ "${mode}" == "release-broker" ]]; then
+    receipt_candidates=()
+  elif [[ -n "${JERYU_JANKURAI_RECEIPT:-}" ]]; then
+    receipt_candidates=("${JERYU_JANKURAI_RECEIPT}")
+  elif [[ "${bin}" == "${expected_governed}" ]]; then
+    governed_root="$(dirname "$(dirname "${expected_governed}")")"
+    receipt_candidates=("${governed_root}"/receipts/jankurai/sha256/*.json)
+  else
+    printf 'non-governed jankurai requires an explicit installation receipt: %s\n' \
+      "${bin}" >&2
+    exit 1
+  fi
+  for receipt in "${receipt_candidates[@]}"; do
+    [[ -f "${receipt}" ]] || continue
+    receipt_digest="$(basename "${receipt}" .json)"
+    [[ "${receipt_digest}" =~ ^[0-9a-f]{64}$ ]] || continue
+    receipt_sha="$(sha256sum "${receipt}" | awk '{print $1}')"
+    [[ "${receipt_sha}" == "${receipt_digest}" ]] || continue
+    if jq -e \
+      --arg remote "${JERYU_JANKURAI_SOURCE_REPO}" \
+      --arg commit "${JERYU_JANKURAI_SOURCE_REV}" \
+      --arg tag "${JERYU_JANKURAI_SOURCE_TAG}" \
+      --arg tree "${JERYU_JANKURAI_SOURCE_TREE}" \
+      --arg archive "${JERYU_JANKURAI_SOURCE_ARCHIVE_SHA256}" \
+      --arg lock "${JERYU_JANKURAI_CARGO_LOCK_SHA256}" \
+      --arg rustc "${JERYU_JANKURAI_RUSTC_VERSION}" \
+      --arg cargo "${JERYU_JANKURAI_CARGO_VERSION}" \
+      --arg triple "${JERYU_JANKURAI_TARGET_TRIPLE}" \
+      --arg mode "${JERYU_JANKURAI_BUILD_MODE}" \
+      --arg digest "${JERYU_JANKURAI_SHA256}" \
+      --arg version "${JERYU_JANKURAI_VERSION}" \
+      --arg path "${bin}" \
+      --arg verification "${expected_verification}" \
+      --arg governance "${expected_governance}" \
+      --arg protection "${expected_protection}" \
+      --argjson protected_main "${expected_protected}" \
+      --argjson test_mode "${expected_test}" \
+      '.schema == "jeryu.jankurai-installation/v1" and
+       .source.remote == $remote and .source.commit == $commit and .source.tag == $tag and
+       .source.tree == $tree and .source.archive_sha256 == $archive and
+       .source.cargo_lock_sha256 == $lock and .source.verification == $verification and
+       .build.rustc == $rustc and .build.cargo == $cargo and
+       .build.target_triple == $triple and .build.mode == $mode and
+       .build.cargo_net_offline == true and .build.dedicated_cargo_home == true and
+       .build.git_global_config_disabled == true and .build.git_system_config_disabled == true and
+       .build.git_http_follow_redirects == false and .build.git_terminal_prompt == false and
+       .build.jankurai_update_check == false and
+       .build.network_scope == "local-forge-source-plus-offline-cargo" and
+       .build.no_proxy == "127.0.0.1,localhost,::1" and
+       .governance.status == $governance and
+       .governance.manifest_repo ==
+         "http://127.0.0.1:8787/git/jeryu/jeryu-tool.git" and
+       (.governance.manifest_commit | test("^[0-9a-f]{40}$")) and
+       (.governance.manifest_tree | test("^[0-9a-f]{40}$")) and
+       (.governance.manifest_sha256 | test("^[0-9a-f]{64}$")) and
+       .governance.protected_main == $protected_main and
+       .governance.protection_policy == $protection and
+       .binary.sha256 == $digest and .binary.version_output == $version and
+       .installation.path == $path and .installation.atomic == true and
+       .test_mode == $test_mode and .conclusion == "success"' "${receipt}" >/dev/null; then
+      export JERYU_JANKURAI_RECEIPT="${receipt}"
+      export JERYU_JANKURAI_RECEIPT_SHA256="${receipt_digest}"
+      found_receipt=1
+      break
+    fi
+  done
+  if [[ "${mode}" != "release-broker" && "${found_receipt}" -ne 1 ]]; then
+    printf 'governed jankurai receipt mismatch: binary=%s test_mode=%s\n' \
+      "${bin}" "${expected_test}" >&2
+    exit 1
+  fi
+  export JANKURAI_NO_UPDATE_CHECK=1 GIT_TERMINAL_PROMPT=0
 }
 
-if [ -x "${PINNED_BIN}" ] && "${PINNED_BIN}" --version | grep -qx "${JANKURAI_VERSION}"; then
-  force_resolved_to_pin
-fi
-if command -v jankurai >/dev/null 2>&1 && jankurai --version | grep -qx "${JANKURAI_VERSION}"; then
-  echo "jankurai ok: ${JANKURAI_VERSION}"
-  exit 0
-fi
-
-install_profile_args=()
-if [ "${JERYU_JANKURAI_INSTALL_DEBUG:-}" = "1" ] ||
-  { [ -z "${JERYU_JANKURAI_INSTALL_DEBUG:-}" ] && [ "${GITHUB_ACTIONS:-}" = "true" ]; }; then
-  install_profile_args+=(--debug)
-  echo "jankurai install profile: debug"
-fi
-
-echo "installing pinned ${JANKURAI_VERSION} from ${JANKURAI_REPO}@${JANKURAI_REV}"
-jankurai_cargo_install --git "${JANKURAI_REPO}" --rev "${JANKURAI_REV}" --locked "${install_profile_args[@]}" --bin jankurai jankurai
-force_resolved_to_pin
-jankurai --version | grep -qx "${JANKURAI_VERSION}"
-echo "jankurai ok: ${JANKURAI_VERSION}"
+require_jankurai
+printf 'governed jankurai ok: %s sha256=%s at %s\n' \
+  "${JERYU_JANKURAI_VERSION}" "${JERYU_JANKURAI_SHA256}" "${JERYU_GOVERNED_JANKURAI_BIN}"

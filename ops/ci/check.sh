@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source ops/ci/lib.sh
+bash ops/ci/test-governed-jankurai-path.sh
 if [[ -f Cargo.toml ]]; then
   cargo metadata --format-version 1 --no-deps >/dev/null
   if [[ "${JERYU_SPLIT_FULL_CHECK:-0}" == "1" ]]; then
