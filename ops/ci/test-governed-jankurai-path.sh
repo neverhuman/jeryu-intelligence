@@ -63,7 +63,7 @@ fi
 [[ "$("${governed_source}" --version)" == 'jankurai 1.6.11' ]] ||
   fail "governed Jankurai test source has the wrong version"
 [[ "$(sha256sum "${governed_source}" | awk '{print $1}')" == \
-   '96d99e6e7d8dc9cf23df1081edd1f975231456592f81d9405385219a2c7298aa' ]] ||
+   '9e6b8857a26f6004d4c74e510e13b06d880f2e2ae0c89502698889ed690c5d6c' ]] ||
   fail "governed Jankurai test source has the wrong digest"
 
 broker_bin="${tmp}/broker/bin/jankurai"
@@ -78,32 +78,58 @@ printf '#!/usr/bin/env bash\nprintf "jankurai 1.6.11\\n"\n' >"${older_local_bin}
 chmod 0755 "${older_local_bin}"
 
 receipt_stage="${tmp}/local-receipt.json"
+# The receipt fixture is built from the generated pin in the reviewed verifier itself, so it
+# describes exactly the identity ensure-jankurai.sh demands and cannot drift from it.
+pin_env="${tmp}/jankurai-pin.env"
+sed -n '/^# BEGIN GENERATED JANKURAI PIN/,/^# END GENERATED JANKURAI PIN$/p' \
+  "${source_verifier}" >"${pin_env}"
+grep -q '^export JERYU_JANKURAI_SHA256=' "${pin_env}" ||
+  fail "generated Jankurai pin block is absent from the verifier"
+# shellcheck disable=SC1090
+source "${pin_env}"
+[[ "${JERYU_JANKURAI_SHA256}" == "$(sha256sum "${governed_source}" | awk '{print $1}')" ]] ||
+  fail "governed Jankurai test source does not match the generated pin"
 jq -n \
   --arg path "${ambient_bin}" \
+  --arg remote "${JERYU_JANKURAI_SOURCE_REPO}" --arg commit "${JERYU_JANKURAI_SOURCE_REV}" \
+  --arg tag "${JERYU_JANKURAI_SOURCE_TAG}" --arg tree "${JERYU_JANKURAI_SOURCE_TREE}" \
+  --arg archive "${JERYU_JANKURAI_SOURCE_ARCHIVE_SHA256}" \
+  --arg lock "${JERYU_JANKURAI_CARGO_LOCK_SHA256}" \
+  --arg rustc "${JERYU_JANKURAI_RUSTC_VERSION}" --arg cargo "${JERYU_JANKURAI_CARGO_VERSION}" \
+  --arg triple "${JERYU_JANKURAI_TARGET_TRIPLE}" --arg mode "${JERYU_JANKURAI_BUILD_MODE}" \
+  --arg package_path "${JERYU_JANKURAI_PACKAGE_PATH}" \
+  --arg builder_image "${JERYU_JANKURAI_BUILDER_IMAGE}" \
+  --arg builder_image_id "${JERYU_JANKURAI_BUILDER_IMAGE_ID}" \
+  --arg linker "${JERYU_JANKURAI_LINKER_VERSION}" --arg glibc "${JERYU_JANKURAI_GLIBC_VERSION}" \
+  --arg vendor "${JERYU_JANKURAI_VENDOR_FILES_SHA256}" \
+  --arg vendor_count "${JERYU_JANKURAI_VENDOR_FILE_COUNT}" \
+  --arg cargo_config "${JERYU_JANKURAI_CARGO_CONFIG_SHA256}" \
+  --arg environment "${JERYU_JANKURAI_BUILD_ENVIRONMENT}" \
+  --arg rustflags "${JERYU_JANKURAI_RUSTFLAGS}" \
+  --arg command "${JERYU_JANKURAI_BUILD_COMMAND}" \
+  --arg context "${JERYU_JANKURAI_BUILD_CONTEXT_SHA256}" \
+  --arg digest "${JERYU_JANKURAI_SHA256}" --arg version "${JERYU_JANKURAI_VERSION}" \
   '{
-    schema: "jeryu.jankurai-installation/v1",
+    schema: "jeryu.jankurai-installation/v2",
     source: {
-      remote: "http://127.0.0.1:8787/git/jeryu/jankurai.git",
-      commit: "4dfbdfa3585f1928d5f996d7b5e14608dff14a03",
-      tag: "v1.6.11-deadlang-precision-split.2",
-      tree: "7e5d501aa6f0ee6ced9a48c6288a9943d0b9573c",
-      archive_sha256: "1aa3d178dec0fbb8d0657dd465ea6fda830ffc4ec1f65560b7b7d1682fd87e69",
-      cargo_lock_sha256: "b9acb981c326226a687d0b6703e4f7ee303148e9e1a6dda1aa03d77988820f6a",
+      remote: $remote, commit: $commit, tag: $tag, tree: $tree,
+      archive_sha256: $archive, cargo_lock_sha256: $lock,
       verification: "release-authoritative"
     },
     build: {
-      rustc: "rustc 1.95.0 (59807616e 2026-04-14)",
-      cargo: "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
-      target_triple: "x86_64-unknown-linux-gnu",
-      mode: "cargo-install-locked-offline-path-v1",
-      cargo_net_offline: true,
-      dedicated_cargo_home: true,
-      git_global_config_disabled: true,
-      git_system_config_disabled: true,
-      git_http_follow_redirects: false,
-      git_terminal_prompt: false,
+      rustc: $rustc, cargo: $cargo, target_triple: $triple, mode: $mode,
+      package_path: $package_path, builder_image: $builder_image,
+      builder_image_id: $builder_image_id, linker: $linker, glibc: $glibc,
+      vendor_files_sha256: $vendor, vendor_file_count: $vendor_count,
+      cargo_config_sha256: $cargo_config, environment: $environment,
+      rustflags: $rustflags, command: $command, context_sha256: $context,
+      cargo_net_offline: true, closed_vendor: true, network_none: true,
+      read_only_root: true, non_root: true, capabilities_dropped: true,
+      no_new_privileges: true, container_engine_path: "/usr/bin/docker",
+      git_global_config_disabled: true, git_system_config_disabled: true,
+      git_http_follow_redirects: false, git_terminal_prompt: false,
       jankurai_update_check: false,
-      network_scope: "local-forge-source-plus-offline-cargo",
+      network_scope: "local-forge-source-plus-closed-vendor-network-none",
       no_proxy: "127.0.0.1,localhost,::1"
     },
     governance: {
@@ -115,10 +141,7 @@ jq -n \
       protected_main: true,
       protection_policy: "immutable-main-v1"
     },
-    binary: {
-      sha256: "96d99e6e7d8dc9cf23df1081edd1f975231456592f81d9405385219a2c7298aa",
-      version_output: "jankurai 1.6.11"
-    },
+    binary: {sha256: $digest, version_output: $version},
     installation: {path: $path, atomic: true},
     test_mode: false,
     conclusion: "success"
@@ -168,7 +191,7 @@ env -i HOME="${tmp}/home" PATH="${tmp}/broker/bin:/usr/bin:/bin" \
 # when an older same-version binary appears earlier on the real default PATH.
 # shellcheck disable=SC2016
 env -i HOME="${tmp}/home" PATH="${tmp}/home/.local/bin:/usr/bin:/bin" \
-  bash -c 'source "$1"; require_jankurai; [[ "$JERYU_GOVERNED_JANKURAI_BIN" == "$2" ]]; [[ "$(command -v jankurai)" == "$2" ]]' \
+  bash -c 'source "$1"; require_jankurai; [[ "$JERYU_GOVERNED_JANKURAI_BIN" == "$2" ]]; [[ "$(command -v jankurai)" == jankurai ]]; [[ "$(jankurai --version)" == "$JERYU_JANKURAI_VERSION" ]]' \
   bash "${test_local_lib}" "${ambient_bin}"
 # shellcheck disable=SC2016
 env -i HOME="${tmp}/home" PATH="/usr/bin:/bin" \
