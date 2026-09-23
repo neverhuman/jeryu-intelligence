@@ -17,7 +17,8 @@ pub(crate) struct NormalizedLine {
     pub joined: String,
     /// Token count for the line (`joined.split_whitespace().count()`).
     pub token_count: usize,
-    /// Tokens with a `call:`/`macro:`/`member:` role prefix.
+    /// Tokens with a `call:`/`macro:`/`member:` role prefix whose name is NOT
+    /// standard-library plumbing (see [`super::anchors`]).
     pub anchor_count: usize,
     /// Whether the raw line is an import/use/include style declaration.
     pub is_import: bool,
@@ -36,11 +37,7 @@ pub(crate) fn normalized_lines(contents: &str) -> Vec<NormalizedLine> {
             let token_count = tokens.len();
             let anchor_count = tokens
                 .iter()
-                .filter(|token| {
-                    token.starts_with("call:")
-                        || token.starts_with("macro:")
-                        || token.starts_with("member:")
-                })
+                .filter(|token| super::anchors::domain_anchor(token).is_some())
                 .count();
             Some(NormalizedLine {
                 line_number: idx + 1,

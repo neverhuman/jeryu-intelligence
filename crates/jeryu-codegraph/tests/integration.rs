@@ -176,7 +176,7 @@ fn persist_round_trip() {
     store.persist(&snapshot).unwrap();
     let loaded = store.load_snapshot().unwrap();
     assert_eq!(loaded, snapshot);
-    assert_eq!(store.schema_version().unwrap(), "4");
+    assert_eq!(store.schema_version().unwrap(), "5");
     assert_eq!(store.references("CodeGraph").unwrap(), snapshot.symbol_refs);
     assert_eq!(
         store.reverse_deps("jeryu-rustjet").unwrap(),
@@ -389,7 +389,7 @@ fn oracle_query_pack_includes_provenance_refs_and_lanes() {
     )
     .unwrap();
 
-    assert_eq!(pack.provenance.storage_schema, "4");
+    assert_eq!(pack.provenance.storage_schema, "5");
     assert_eq!(pack.definition.as_ref().unwrap().symbol, "CodeGraph");
     assert_eq!(
         pack.references[0].ref_file,
@@ -764,6 +764,28 @@ fn tool_build_system_scan_end_to_end() {
         &block_a.replace("alpha_handler", "gamma_handler"),
     );
 
+    // Standard-library plumbing duplicated verbatim across both repos. It
+    // clears the token and diversity floors, so only the anchor filter keeps
+    // it out: `iter`/`collect`/`to_string` name the language, not a shared
+    // tool. The handler block above is the positive control.
+    let stdlib_block = r#"pub fn gather(values: &[Item], names: &[String], limit: usize) -> Vec<String> {
+    let owned = values.iter().copied().collect::<Vec<_>>();
+    let text = names.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+    let joined = text.join(", ").trim().to_owned();
+    let parsed = joined.parse::<usize>().unwrap_or_default();
+    let mut sorted = owned.clone();
+    sorted.sort();
+    sorted.dedup();
+    let head = sorted.first().copied().unwrap_or_default();
+    let tail = sorted.last().copied().unwrap_or_default();
+    let kept = sorted.into_iter().take(limit).collect::<Vec<_>>();
+    let mapped = kept.iter().map(|item| item.to_string()).collect::<Vec<_>>();
+    mapped
+}
+"#;
+    write_file(&repo_a, "src/gather.rs", stdlib_block);
+    write_file(&repo_b, "src/gather.rs", stdlib_block);
+
     // Managed scaffold: identical CI lane script in both repos.
     let scaffold = r#"set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -880,6 +902,59 @@ exit_with "$LANE_STATUS"
     // Raw span covers the whole duplicated block (comment/blank interleave
     // proves chaining ran in normalized space).
     assert!(occ.end_line - occ.start_line + 1 >= 10);
+    // Standard-library plumbing never becomes a cluster, and no cluster is
+    // named after stdlib calls.
+    assert!(
+        report.clusters.iter().all(|cluster| cluster
+            .occurrences
+            .iter()
+            .all(|o| o.path != "src/gather.rs")),
+        "stdlib-only repetition must not rank as a tool candidate"
+    );
+
+    // Family totals union the members' coverage instead of counting a file
+    // once per member cluster.
+    for family in &report.families {
+        let covered: std::collections::BTreeSet<(String, String)> = family
+            .cluster_ids
+            .iter()
+            .filter_map(|id| {
+                report
+                    .clusters
+                    .iter()
+                    .find(|cluster| &cluster.cluster_id == id)
+            })
+            .flat_map(|cluster| {
+                cluster
+                    .coverage
+                    .iter()
+                    .map(|file| (file.repo_id.clone(), file.path.clone()))
+            })
+            .collect();
+        assert_eq!(
+            family.file_total,
+            covered.len(),
+            "family {} must count distinct files",
+            family.family_id
+        );
+    }
+
+    // Every v2 cluster records uncapped per-file coverage, and a cluster's
+    // duplicated lines are exactly what that coverage spans.
+    assert!(
+        report
+            .clusters
+            .iter()
+            .all(|cluster| !cluster.coverage.is_empty()),
+        "system-scan clusters carry coverage"
+    );
+    let covered_lines: usize = handler
+        .coverage
+        .iter()
+        .map(jeryu_codegraph::ToolBuildFileCoverage::line_count)
+        .sum();
+    assert_eq!(covered_lines, handler.total_lines);
+
     // No occurrence from gitignored junk or generated zones.
     assert!(
         report.clusters.iter().all(|cluster| cluster
@@ -999,7 +1074,7 @@ INSERT INTO codegraph_tool_build_ignores VALUES
     }
 
     let store = CodeGraphStore::open(&db).unwrap();
-    assert_eq!(store.schema_version().unwrap(), "4");
+    assert_eq!(store.schema_version().unwrap(), "5");
     let conn = rusqlite::Connection::open(&db).unwrap();
     let ddl: String = conn
         .query_row(
@@ -1028,4 +1103,102 @@ INSERT INTO codegraph_tool_build_ignores VALUES
     assert_eq!(again.tool_build_clusters(None, 10, true).unwrap().len(), 1);
 
     let _ = std::fs::remove_file(&db);
+}
+
+/// Initialize a git repository with one commit, so its root commit identifies
+/// it. Returns the root commit sha.
+fn git_repo_with_commit(root: &std::path::Path, seed: &str) -> String {
+    write_file(root, "seed.txt", seed);
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.invalid"]);
+    git(&["config", "user.name", "codegraph test"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "seed"]);
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-list", "--max-parents=0", "HEAD"])
+        .output()
+        .expect("root commit");
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+/// One repository stored under two owners (`jeryu/model-zoo` and
+/// `veox/model-zoo`) is ONE repo. Discovering both would make every file in it
+/// duplicated "across repos" and hand the ranking to a storage accident.
+#[test]
+fn discovery_collapses_one_repository_stored_under_two_owners() {
+    use jeryu_codegraph::discover_system_repo_roots;
+
+    let parent = unique_dir("dup-owner-parent");
+    let canonical = parent.join("alpha-split/model-zoo");
+    let second_owner = parent.join("beta-split/model-zoo");
+    write_file(&canonical, "src/lib.rs", PARITY_HANDLER);
+    write_file(&second_owner, "src/lib.rs", PARITY_HANDLER);
+    write_file(
+        &parent.join("alpha-split"),
+        "repos.manifest.toml",
+        &format!(
+            "[[repo]]\npath = \"{}\"\nname = \"model-zoo\"\ngithub_slug = \"jeryu/model-zoo\"\n",
+            canonical.display()
+        ),
+    );
+    write_file(
+        &parent.join("beta-split"),
+        "repos.manifest.toml",
+        &format!(
+            "[[repo]]\npath = \"{}\"\nname = \"model-zoo\"\n\
+             github = \"git@github.com:veox/model-zoo.git\"\n",
+            second_owner.display()
+        ),
+    );
+
+    let roots = discover_system_repo_roots(std::slice::from_ref(&parent)).unwrap();
+    let ids: Vec<&str> = roots.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(ids, vec!["model-zoo"], "one repository, one root");
+    // The family-canonical checkout (first manifest in sorted order) wins.
+    assert_eq!(roots[0].1, canonical.canonicalize().unwrap());
+}
+
+/// Same name, genuinely different repositories: git proves it by root commit,
+/// so both are scanned and the name collision is family-qualified.
+#[test]
+fn discovery_keeps_same_named_repositories_with_different_histories() {
+    use jeryu_codegraph::discover_system_repo_roots;
+
+    let parent = unique_dir("same-name-parent");
+    let alpha_docs = parent.join("alpha-split/docs");
+    let beta_docs = parent.join("beta-split/docs");
+    let alpha_root = git_repo_with_commit(&alpha_docs, "alpha");
+    let beta_root = git_repo_with_commit(&beta_docs, "beta");
+    assert_ne!(alpha_root, beta_root, "fixtures must differ");
+    write_file(
+        &parent.join("alpha-split"),
+        "repos.manifest.toml",
+        &format!(
+            "[[repo]]\npath = \"{}\"\nname = \"docs\"\ngithub_slug = \"one/docs\"\n",
+            alpha_docs.display()
+        ),
+    );
+    write_file(
+        &parent.join("beta-split"),
+        "repos.manifest.toml",
+        &format!(
+            "[[repo]]\npath = \"{}\"\nname = \"docs\"\ngithub_slug = \"two/docs\"\n",
+            beta_docs.display()
+        ),
+    );
+
+    let roots = discover_system_repo_roots(std::slice::from_ref(&parent)).unwrap();
+    let ids: Vec<&str> = roots.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(ids, vec!["beta-split/docs", "docs"]);
 }

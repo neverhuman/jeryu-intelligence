@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS codegraph_tool_build_clusters (
     created_at         TEXT NOT NULL,
     category           TEXT NOT NULL DEFAULT 'tool-candidate',
     member_cluster_ids_json TEXT NOT NULL DEFAULT '[]',
+    coverage_json      TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (repo_id, cluster_id)
 );
 
@@ -120,7 +121,7 @@ CREATE TABLE IF NOT EXISTS codegraph_meta (
     value TEXT NOT NULL
 );
 
-INSERT OR REPLACE INTO codegraph_meta (key, value) VALUES ('schema_version', '4');
+INSERT OR REPLACE INTO codegraph_meta (key, value) VALUES ('schema_version', '5');
 "#;
 
 /// Default database location under the user's local Jeryu data directory.
@@ -281,6 +282,7 @@ impl CodeGraphStore {
         conn.execute_batch(SCHEMA)
             .map_err(|e| CodeGraphError::Storage(e.to_string()))?;
         migrate_tool_build_clusters(&conn)?;
+        add_cluster_coverage_column(&conn)?;
         Ok(store)
     }
 
@@ -679,8 +681,10 @@ impl CodeGraphStore {
                 "INSERT OR REPLACE INTO codegraph_tool_build_clusters \
                  (cluster_id, repo_id, commit_sha, fingerprint, score, occurrence_count, \
                   repo_count, file_count, total_lines, language, insight, normalized_preview, \
-                  occurrences_json, created_at, category, member_cluster_ids_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                  occurrences_json, created_at, category, member_cluster_ids_json, \
+                  coverage_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
+                  ?17)",
                 params![
                     cluster.cluster_id,
                     cluster.repo_id,
@@ -699,6 +703,8 @@ impl CodeGraphStore {
                     report.scanned_at,
                     cluster.category.as_str(),
                     serde_json::to_string(&cluster.member_cluster_ids)
+                        .map_err(|e| CodeGraphError::Storage(e.to_string()))?,
+                    serde_json::to_string(&cluster.coverage)
                         .map_err(|e| CodeGraphError::Storage(e.to_string()))?,
                 ],
             )
@@ -722,7 +728,7 @@ impl CodeGraphStore {
                        c.occurrence_count, c.repo_count, c.file_count, c.total_lines, \
                        c.language, c.insight, c.normalized_preview, c.occurrences_json, \
                        c.category, c.member_cluster_ids_json, \
-                       i.reason, i.ignored_by, i.ignored_at \
+                       i.reason, i.ignored_by, i.ignored_at, c.coverage_json \
                        FROM codegraph_tool_build_clusters c \
                        LEFT JOIN codegraph_tool_build_ignores i ON i.cluster_id = c.cluster_id";
         let order = " ORDER BY c.score DESC, c.occurrence_count DESC, c.cluster_id LIMIT ?";
@@ -976,6 +982,28 @@ COMMIT;
     .map_err(|e| CodeGraphError::Storage(e.to_string()))
 }
 
+/// Additive v5 migration: give pre-coverage cluster tables the
+/// `coverage_json` column. Existing rows keep `'[]'`, which family
+/// aggregation reads as "no coverage recorded" and falls back to summed
+/// member totals for. No-op on fresh DBs, which get the column from `SCHEMA`.
+fn add_cluster_coverage_column(conn: &Connection) -> Result<()> {
+    let has_column = conn
+        .prepare("SELECT * FROM codegraph_tool_build_clusters LIMIT 0")
+        .map_err(|e| CodeGraphError::Storage(e.to_string()))?
+        .column_names()
+        .contains(&"coverage_json");
+    if has_column {
+        return Ok(());
+    }
+    conn.execute(
+        "ALTER TABLE codegraph_tool_build_clusters \
+         ADD COLUMN coverage_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    )
+    .map(|_| ())
+    .map_err(|e| CodeGraphError::Storage(e.to_string()))
+}
+
 fn collect_rows<T, F>(rows: rusqlite::MappedRows<'_, F>) -> Result<Vec<T>>
 where
     F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
@@ -998,6 +1026,9 @@ fn tool_build_cluster_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Tool
     let reason: Option<String> = row.get(15)?;
     let ignored_by: Option<String> = row.get(16)?;
     let ignored_at: Option<String> = row.get(17)?;
+    let coverage_json: String = row.get(18)?;
+    let coverage =
+        serde_json::from_str(&coverage_json).map_err(|error| sqlite_json_error(18, error))?;
     let cluster_id: String = row.get(0)?;
     let ignored = match (reason, ignored_by, ignored_at) {
         (Some(reason), Some(ignored_by), Some(ignored_at)) => Some(ToolBuildIgnore {
@@ -1023,6 +1054,7 @@ fn tool_build_cluster_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Tool
         normalized_preview: row.get(11)?,
         category: crate::tool_build::ToolBuildCategory::from_label(&category_label),
         member_cluster_ids,
+        coverage,
         occurrences,
         ignored,
     })

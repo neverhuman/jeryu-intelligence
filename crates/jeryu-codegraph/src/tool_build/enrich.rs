@@ -61,15 +61,18 @@ pub fn suggested_kind(language: &str) -> &'static str {
 
 /// A short human label mined from the preview's call/macro anchors (first
 /// three distinct names), falling back to the language.
+///
+/// Standard-library names are skipped: "display, ok, read_to_string" names the
+/// language, not the duplicated behavior a shared tool would absorb.
 #[must_use]
 pub fn anchor_label(cluster: &ToolBuildCluster) -> String {
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     let mut ordered: Vec<&str> = Vec::new();
     for token in cluster.normalized_preview.split_whitespace() {
-        if let Some(name) = token
-            .strip_prefix("call:")
-            .or_else(|| token.strip_prefix("macro:"))
-        {
+        if !token.starts_with("call:") && !token.starts_with("macro:") {
+            continue;
+        }
+        if let Some(name) = super::anchors::domain_anchor(token) {
             if seen.insert(name) {
                 ordered.push(name);
             }
@@ -141,6 +144,7 @@ mod tests {
                 "kw:let id op:= call:retry op:( id op:)\nmacro:assert_eq member:unwrap".to_string(),
             category: ToolBuildCategory::ToolCandidate,
             member_cluster_ids: Vec::new(),
+            coverage: Vec::new(),
             occurrences: vec![ToolBuildOccurrence {
                 repo_id: "repo-a".to_string(),
                 commit_sha: "working-tree".to_string(),
@@ -161,8 +165,17 @@ mod tests {
         // 36 total lines minus the 12-line retained copy.
         assert_eq!(enriched.anticipated_loc_saved, 24);
         assert_eq!(enriched.suggested_kind, "rust-crate");
-        assert_eq!(enriched.anchor_label, "retry, assert_eq");
+        // `assert_eq` is standard-library plumbing and never names a cluster.
+        assert_eq!(enriched.anchor_label, "retry");
         assert!(enriched.suggested_name.contains("Shared rust helper"));
+    }
+
+    #[test]
+    fn stdlib_only_previews_fall_back_to_the_language() {
+        let mut only_stdlib = cluster();
+        only_stdlib.normalized_preview =
+            "call:display id call:ok call:read_to_string macro:vec".to_string();
+        assert_eq!(anchor_label(&only_stdlib), "rust");
     }
 
     #[test]

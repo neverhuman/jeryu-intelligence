@@ -18,8 +18,8 @@ use super::normalize::{NormalizedLine, normalized_lines};
 use super::progress::{ToolBuildScanPhase, ToolBuildScanProgress};
 use super::walk::{self, PathClass};
 use super::{
-    ToolBuildCategory, ToolBuildCluster, ToolBuildOccurrence, ToolBuildScanOptions,
-    ToolBuildScanReport, enrich, epoch_millis, families, merge,
+    ToolBuildCategory, ToolBuildCluster, ToolBuildFileCoverage, ToolBuildOccurrence,
+    ToolBuildScanOptions, ToolBuildScanReport, enrich, epoch_millis, families, merge,
 };
 use crate::error::{CodeGraphError, Result};
 
@@ -733,6 +733,14 @@ fn build_cluster(
         })
         .collect();
 
+    // Full, uncapped per-file coverage: what families aggregate over. The v1
+    // path leaves it empty so v1 report bytes stay unchanged.
+    let coverage = if options.compat_v1 {
+        Vec::new()
+    } else {
+        file_coverage(&proto.occs, roots, file_table)
+    };
+
     ToolBuildCluster {
         cluster_id: format!("toolbuild-{}", &recon.fingerprint_hex[..16]),
         repo_id: label_repo_id.to_string(),
@@ -747,6 +755,7 @@ fn build_cluster(
         insight,
         normalized_preview: recon.preview,
         category,
+        coverage,
         member_cluster_ids: proto
             .member_keys
             .iter()
@@ -755,6 +764,44 @@ fn build_cluster(
         occurrences,
         ignored: None,
     }
+}
+
+/// Group every occurrence by file and merge its spans into non-overlapping
+/// inclusive ranges, so a file is one entry and a line is counted once.
+fn file_coverage(
+    occs: &[ScanOccurrence],
+    roots: &[(String, PathBuf)],
+    file_table: &[FileEntry],
+) -> Vec<ToolBuildFileCoverage> {
+    let mut by_file: BTreeMap<(&str, &str), Vec<(usize, usize)>> = BTreeMap::new();
+    for occ in occs {
+        let file = &file_table[occ.file_idx as usize];
+        by_file
+            .entry((roots[occ.repo_idx as usize].0.as_str(), file.rel.as_str()))
+            .or_default()
+            .push((occ.start_line as usize, occ.end_line as usize));
+    }
+    by_file
+        .into_iter()
+        .map(|((repo_id, path), spans)| ToolBuildFileCoverage {
+            repo_id: repo_id.to_string(),
+            path: path.to_string(),
+            spans: merge_spans(spans),
+        })
+        .collect()
+}
+
+/// Sort and coalesce inclusive line spans that overlap or touch.
+pub(crate) fn merge_spans(mut spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    spans.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+    for (start, end) in spans {
+        match merged.last_mut() {
+            Some(last) if start <= last.1.saturating_add(1) => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
 }
 
 /// The first 16 hex chars of the full fingerprint, recovered from the 16-byte
@@ -766,4 +813,20 @@ pub(crate) fn key_hex_prefix(key: u128) -> String {
         out.push_str(&format!("{byte:02x}"));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spans_coalesce_when_they_overlap_or_touch() {
+        assert_eq!(
+            merge_spans(vec![(10, 18), (11, 19), (30, 38), (19, 25)]),
+            vec![(10, 25), (30, 38)]
+        );
+        // Adjacent spans (18 then 19) are one duplicated run, not two.
+        assert_eq!(merge_spans(vec![(19, 20), (10, 18)]), vec![(10, 20)]);
+        assert_eq!(merge_spans(vec![]), vec![]);
+    }
 }

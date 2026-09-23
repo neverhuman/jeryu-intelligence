@@ -36,8 +36,9 @@ pub use tool_build::enrich::{
     ClusterEnrichment, anticipated_loc_saved, enrich_cluster, suggested_kind,
 };
 pub use tool_build::{
-    ToolBuildCategory, ToolBuildCluster, ToolBuildClusterFamily, ToolBuildIgnore,
-    ToolBuildOccurrence, ToolBuildScanConfig, ToolBuildScanOptions, ToolBuildScanPhase,
-    ToolBuildScanProgress, ToolBuildScanReport, discover_system_repo_roots, group_pattern_families,
-    scan_tool_build_clusters, scan_tool_build_family, scan_tool_build_system,
+    ToolBuildCategory, ToolBuildCluster, ToolBuildClusterFamily, ToolBuildFileCoverage,
+    ToolBuildIgnore, ToolBuildOccurrence, ToolBuildScanConfig, ToolBuildScanOptions,
+    ToolBuildScanPhase, ToolBuildScanProgress, ToolBuildScanReport, discover_system_repo_roots,
+    group_pattern_families, scan_tool_build_clusters, scan_tool_build_family,
+    scan_tool_build_system,
 };

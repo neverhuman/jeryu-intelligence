@@ -14,6 +14,7 @@
 //! feedback stay valid. All new behavior is reached through
 //! [`scan_tool_build_system`] / [`ToolBuildScanOptions`].
 
+mod anchors;
 pub mod enrich;
 mod families;
 mod merge;
@@ -22,6 +23,7 @@ mod progress;
 mod scan;
 mod walk;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -254,11 +256,41 @@ pub struct ToolBuildCluster {
     /// propagate onto the merged cluster.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub member_cluster_ids: Vec<String>,
+    /// Every duplicated span the cluster covers, grouped per file and merged
+    /// into non-overlapping ranges. Unlike [`Self::occurrences`] this is never
+    /// capped, so family aggregation can count distinct files, spans and lines
+    /// instead of summing member clusters that cover the same code twice.
+    /// Empty on the v1 compat path and on rows persisted before coverage
+    /// existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub coverage: Vec<ToolBuildFileCoverage>,
     /// Representative occurrences, capped for compact MCP responses.
     pub occurrences: Vec<ToolBuildOccurrence>,
     /// Optional ignore feedback from the durable store.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ignored: Option<ToolBuildIgnore>,
+}
+
+/// The duplicated spans one cluster covers inside one file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolBuildFileCoverage {
+    /// Stable repository id the file belongs to.
+    pub repo_id: String,
+    /// Repo-relative path.
+    pub path: String,
+    /// Sorted, non-overlapping inclusive `[start_line, end_line]` ranges.
+    pub spans: Vec<(usize, usize)>,
+}
+
+impl ToolBuildFileCoverage {
+    /// Total duplicated lines this file contributes (spans never overlap).
+    #[must_use]
+    pub fn line_count(&self) -> usize {
+        self.spans
+            .iter()
+            .map(|(start, end)| end.saturating_sub(*start) + 1)
+            .sum()
+    }
 }
 
 /// One code occurrence in a repeated-code cluster.
@@ -314,11 +346,14 @@ pub struct ToolBuildClusterFamily {
     pub repo_ids: Vec<String>,
     /// Number of member clusters.
     pub cluster_count: usize,
-    /// Total occurrences across member clusters.
+    /// Distinct duplicated spans over the union of the members' coverage.
+    /// Member clusters are variants of one pattern and overlap heavily, so
+    /// this is a union, not a sum (sums count one file once per variant).
     pub occurrence_total: usize,
-    /// Total distinct files across member clusters.
+    /// Distinct files over the union of the members' coverage.
     pub file_total: usize,
-    /// Sum of the members' anticipated LOC saved (see [`enrich`]).
+    /// Anticipated LOC saved over the unioned coverage: every duplicated line
+    /// the family covers, minus the one copy a shared tool would retain.
     pub anticipated_loc_saved_total: usize,
     /// Sum of the members' heuristic scores.
     pub score_total: u64,
@@ -399,15 +434,24 @@ pub fn scan_tool_build_system(
 /// carry an absolute `path`; entries without one resolve to a sibling
 /// directory named after the repo.
 ///
-/// Dedupe runs on LOGICAL identity (the `github_slug`/`github` remote, falling
-/// back to the repo name), not just canonical path: family manifests routinely
-/// point at extra live checkouts of the same repo (deploy clones, worktrees),
-/// and scanning two checkouts of one repo manufactures fake "cross-repo"
-/// duplication. First manifest in sorted order wins, so the family-canonical
-/// checkout beats stray deployment clones. Returned sorted by repo id.
+/// Dedupe runs on LOGICAL identity, not just canonical path: family manifests
+/// routinely point at extra live checkouts of the same repo (deploy clones,
+/// worktrees) and at the same repo stored under two owners
+/// (`jeryu/model-zoo` and `veox/model-zoo`). Scanning two checkouts of one
+/// repository manufactures fake "cross-repo" duplication that dominates every
+/// ranking, so identity is the repo NAME with the owner stripped: a slug's
+/// last segment, else the remote URL's last segment, else the manifest name.
+///
+/// Two entries that share a name but are genuinely different repositories
+/// (same name in different families) are kept apart when git can prove it —
+/// their root commits differ. When git cannot answer for either checkout the
+/// entries are treated as one repository, because a shared name across two
+/// owners is overwhelmingly one repository, and a fake duplicate poisons every
+/// cluster it touches while a missing repo only costs coverage.
+///
+/// First manifest in sorted order wins, so the family-canonical checkout beats
+/// stray deployment clones. Returned sorted by repo id.
 pub fn discover_system_repo_roots(manifest_parents: &[PathBuf]) -> Result<Vec<(String, PathBuf)>> {
-    use std::collections::{BTreeMap, BTreeSet};
-
     #[derive(Deserialize)]
     struct LooseManifest {
         #[serde(default)]
@@ -422,19 +466,16 @@ pub fn discover_system_repo_roots(manifest_parents: &[PathBuf]) -> Result<Vec<(S
     }
 
     impl LooseManifestRepo {
-        /// Stable logical identity: explicit slug, else owner/name parsed from
-        /// the github remote URL, else the bare repo name.
+        /// Stable logical identity: the repository name with any owner
+        /// stripped, lowercased. Owner-qualified slugs of one repository
+        /// (`jeryu/model-zoo`, `veox/model-zoo`) collapse to one id.
         fn logical_id(&self) -> Option<String> {
             if let Some(slug) = &self.github_slug {
-                return Some(slug.to_ascii_lowercase());
+                return Some(last_segment(slug).to_ascii_lowercase());
             }
             if let Some(url) = &self.github {
                 let trimmed = url.trim_end_matches('/').trim_end_matches(".git");
-                let mut segments = trimmed.rsplit('/');
-                let name = segments.next()?;
-                let owner = segments.next()?;
-                let owner = owner.rsplit(':').next().unwrap_or(owner);
-                return Some(format!("{owner}/{name}").to_ascii_lowercase());
+                return Some(last_segment(trimmed).to_ascii_lowercase());
             }
             self.name.as_ref().map(|name| name.to_ascii_lowercase())
         }
@@ -474,7 +515,10 @@ pub fn discover_system_repo_roots(manifest_parents: &[PathBuf]) -> Result<Vec<(S
     }
 
     let mut seen_roots: BTreeSet<PathBuf> = BTreeSet::new();
-    let mut seen_logical: BTreeSet<String> = BTreeSet::new();
+    // Logical id -> the checkouts already claimed under it. A later checkout
+    // joins them only when git proves it is a different repository.
+    let mut claimed: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    let mut root_commits: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
     let mut roots: BTreeMap<String, PathBuf> = BTreeMap::new();
     for manifest in &manifests {
         let text = std::fs::read_to_string(manifest).map_err(|source| CodeGraphError::Index {
@@ -495,11 +539,16 @@ pub fn discover_system_repo_roots(manifest_parents: &[PathBuf]) -> Result<Vec<(S
             let Ok(canonical) = root.canonicalize() else {
                 continue;
             };
-            if let Some(logical) = repo.logical_id()
-                && !seen_logical.insert(logical)
-            {
-                // A second checkout of an already-claimed logical repo.
-                continue;
+            if let Some(logical) = repo.logical_id() {
+                let claimants = claimed.entry(logical).or_default();
+                if claimants
+                    .iter()
+                    .any(|other| !distinct_repositories(other, &canonical, &mut root_commits))
+                {
+                    // A second checkout of an already-claimed repository.
+                    continue;
+                }
+                claimants.push(canonical.clone());
             }
             if !seen_roots.insert(canonical.clone()) {
                 continue;
@@ -524,6 +573,70 @@ pub fn discover_system_repo_roots(manifest_parents: &[PathBuf]) -> Result<Vec<(S
         }
     }
     Ok(roots.into_iter().collect())
+}
+
+/// The last `/`-separated segment of a slug or remote URL, with any `scp`-style
+/// `host:owner` prefix dropped.
+fn last_segment(value: &str) -> &str {
+    let tail = value
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(value);
+    tail.rsplit(':').next().unwrap_or(tail)
+}
+
+/// Whether two same-named checkouts are provably different repositories.
+///
+/// Git answers by root commit: every clone, fork and re-owned copy of a
+/// repository shares its initial commit(s). An unanswerable checkout (no git,
+/// no commits) is treated as the same repository — see
+/// [`discover_system_repo_roots`] for why that direction is the safe one.
+fn distinct_repositories(
+    left: &Path,
+    right: &Path,
+    cache: &mut BTreeMap<PathBuf, BTreeSet<String>>,
+) -> bool {
+    let left_commits = root_commits_cached(left, cache);
+    if left_commits.is_empty() {
+        return false;
+    }
+    let right_commits = root_commits_cached(right, cache);
+    if right_commits.is_empty() {
+        return false;
+    }
+    left_commits.is_disjoint(&right_commits)
+}
+
+fn root_commits_cached(
+    root: &Path,
+    cache: &mut BTreeMap<PathBuf, BTreeSet<String>>,
+) -> BTreeSet<String> {
+    if let Some(cached) = cache.get(root) {
+        return cached.clone();
+    }
+    let commits = git_root_commits(root);
+    cache.insert(root.to_path_buf(), commits.clone());
+    commits
+}
+
+/// The parentless commits reachable from every ref of a checkout. Empty when
+/// the path is not a git repository or git is unavailable.
+fn git_root_commits(root: &Path) -> BTreeSet<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-list", "--max-parents=0", "--all"])
+        .output();
+    match output {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect(),
+        _ => BTreeSet::new(),
+    }
 }
 
 /// The `*-split` family directory name a manifest belongs to.

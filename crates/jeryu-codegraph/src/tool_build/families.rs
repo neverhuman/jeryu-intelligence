@@ -85,16 +85,41 @@ pub fn group_pattern_families(clusters: &[ToolBuildCluster]) -> Vec<ToolBuildClu
     families
 }
 
-/// The dedup'd `call:`/`macro:`/`member:` tokens of a cluster's preview.
+/// Distinct spans, files and anticipated LOC saved over a family's unioned
+/// coverage. One copy of the duplicated code is retained when a shared tool
+/// absorbs the rest, so the largest span never counts as saved.
+fn union_totals(
+    coverage: &BTreeMap<(String, String), Vec<(usize, usize)>>,
+) -> (usize, usize, usize) {
+    let mut spans_total = 0;
+    let mut lines_total = 0;
+    let mut largest_span = 0;
+    for spans in coverage.values() {
+        for (start, end) in super::scan::merge_spans(spans.clone()) {
+            let lines = end.saturating_sub(start) + 1;
+            spans_total += 1;
+            lines_total += lines;
+            largest_span = largest_span.max(lines);
+        }
+    }
+    (
+        spans_total,
+        coverage.len(),
+        lines_total.saturating_sub(largest_span),
+    )
+}
+
+/// The dedup'd domain `call:`/`macro:`/`member:` tokens of a cluster's preview.
+///
+/// Standard-library names are excluded: grouping on `iter`/`collect`/`unwrap`
+/// would fuse unrelated clusters into one huge "family" of Rust boilerplate.
+/// A cluster left with fewer than [`MIN_SIGNATURE`] domain anchors stays a
+/// singleton.
 fn anchor_signature(cluster: &ToolBuildCluster) -> BTreeSet<String> {
     cluster
         .normalized_preview
         .split_whitespace()
-        .filter(|token| {
-            token.starts_with("call:")
-                || token.starts_with("macro:")
-                || token.starts_with("member:")
-        })
+        .filter_map(super::anchors::domain_anchor)
         .map(str::to_string)
         .collect()
 }
@@ -108,9 +133,11 @@ fn build_family(
     let mut repo_ids: BTreeSet<String> = BTreeSet::new();
     let mut union_signature: BTreeSet<String> = BTreeSet::new();
     let mut anchor_frequency: BTreeMap<String, usize> = BTreeMap::new();
-    let mut occurrence_total = 0;
-    let mut file_total = 0;
-    let mut anticipated_total = 0;
+    let mut coverage: BTreeMap<(String, String), Vec<(usize, usize)>> = BTreeMap::new();
+    let mut every_member_has_coverage = true;
+    let mut summed_occurrences = 0;
+    let mut summed_files = 0;
+    let mut summed_anticipated = 0;
     let mut score_total: u64 = 0;
     let mut language = String::new();
     let mut category = super::ToolBuildCategory::ToolCandidate;
@@ -125,27 +152,43 @@ fn build_family(
             union_signature.insert(anchor.clone());
             *anchor_frequency.entry(anchor.clone()).or_default() += 1;
         }
-        occurrence_total += cluster.occurrence_count;
-        file_total += cluster.file_count;
-        anticipated_total += enrich::anticipated_loc_saved(cluster);
+        every_member_has_coverage &= !cluster.coverage.is_empty();
+        for file in &cluster.coverage {
+            repo_ids.insert(file.repo_id.clone());
+            coverage
+                .entry((file.repo_id.clone(), file.path.clone()))
+                .or_default()
+                .extend(file.spans.iter().copied());
+        }
+        summed_occurrences += cluster.occurrence_count;
+        summed_files += cluster.file_count;
+        summed_anticipated += enrich::anticipated_loc_saved(cluster);
         score_total = score_total.saturating_add(cluster.score);
         language = cluster.language.clone();
         category = cluster.category;
     }
     cluster_ids.sort();
 
-    // Label: the three most frequent anchors, ties broken lexically, with the
-    // role prefix stripped for humans.
+    // Member clusters are variants of one pattern, so they routinely cover the
+    // same files and even the same lines. Summing their counts reports those
+    // files, occurrences and lines once per variant — which is how a family of
+    // 30 window variants over 80 files claimed thousands of "occurrences" and
+    // an equal number of "files". Aggregate over the union of the members'
+    // coverage instead; fall back to the sums only for rows persisted before
+    // coverage was recorded.
+    let (occurrence_total, file_total, anticipated_total) = if every_member_has_coverage {
+        union_totals(&coverage)
+    } else {
+        (summed_occurrences, summed_files, summed_anticipated)
+    };
+
+    // Label: the three most frequent domain anchors, ties broken lexically.
     let mut ranked: Vec<(&String, &usize)> = anchor_frequency.iter().collect();
     ranked.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
     let label_anchors: Vec<&str> = ranked
         .iter()
         .take(3)
-        .map(|(anchor, _)| {
-            anchor
-                .split_once(':')
-                .map_or(anchor.as_str(), |(_, name)| name)
-        })
+        .map(|(anchor, _)| anchor.as_str())
         .collect();
     let label = if label_anchors.is_empty() {
         format!("{language} pattern")
@@ -185,7 +228,9 @@ fn build_family(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{ToolBuildCategory, ToolBuildCluster, ToolBuildOccurrence};
+    use super::super::{
+        ToolBuildCategory, ToolBuildCluster, ToolBuildFileCoverage, ToolBuildOccurrence,
+    };
     use super::*;
 
     fn cluster(id: &str, language: &str, preview: &str, repos: &[&str]) -> ToolBuildCluster {
@@ -204,6 +249,16 @@ mod tests {
             normalized_preview: preview.to_string(),
             category: ToolBuildCategory::ToolCandidate,
             member_cluster_ids: Vec::new(),
+            // Every member covers the SAME file span in each repo: summing
+            // member counts would report it once per member.
+            coverage: repos
+                .iter()
+                .map(|repo| ToolBuildFileCoverage {
+                    repo_id: (*repo).to_string(),
+                    path: "src/lib.rs".to_string(),
+                    spans: vec![(1, 10)],
+                })
+                .collect(),
             occurrences: repos
                 .iter()
                 .map(|repo| ToolBuildOccurrence {
@@ -241,6 +296,77 @@ mod tests {
         assert_eq!(family.cluster_count, 2);
         assert_eq!(family.repo_ids, vec!["repo-a", "repo-b", "repo-c"]);
         assert!(family.label.contains("retry"));
+    }
+
+    #[test]
+    fn family_totals_union_member_coverage_instead_of_summing() {
+        // Two window variants of one pattern, covering the SAME two files.
+        let a = cluster(
+            "toolbuild-aaa",
+            "rust",
+            "kw:let id op:= call:retry op:( id op:) call:call_remote",
+            &["repo-a", "repo-b"],
+        );
+        let b = cluster(
+            "toolbuild-bbb",
+            "rust",
+            "kw:let id op:= call:retry op:( lit:num op:) call:call_remote",
+            &["repo-a", "repo-b"],
+        );
+        let families = group_pattern_families(&[a, b]);
+        assert_eq!(families.len(), 1);
+        let family = &families[0];
+        // Summing members would claim 4 occurrences over 4 files; the union is
+        // two spans in two files.
+        assert_eq!(family.occurrence_total, 2);
+        assert_eq!(family.file_total, 2);
+        // 20 duplicated lines minus the one 10-line copy a tool would retain.
+        assert_eq!(family.anticipated_loc_saved_total, 10);
+    }
+
+    #[test]
+    fn totals_fall_back_to_sums_without_coverage() {
+        // Rows persisted before coverage existed still aggregate, by sum.
+        let mut a = cluster(
+            "toolbuild-aaa",
+            "rust",
+            "call:retry call:call_remote",
+            &["r1", "r2"],
+        );
+        let mut b = cluster(
+            "toolbuild-bbb",
+            "rust",
+            "call:retry call:call_remote",
+            &["r1", "r2"],
+        );
+        a.coverage.clear();
+        b.coverage.clear();
+        let families = group_pattern_families(&[a, b]);
+        assert_eq!(families.len(), 1);
+        assert_eq!(families[0].occurrence_total, 4);
+        assert_eq!(families[0].file_total, 4);
+    }
+
+    #[test]
+    fn stdlib_anchors_never_group_or_name_a_family() {
+        // Two unrelated clusters whose only anchors are standard library.
+        let a = cluster(
+            "toolbuild-aaa",
+            "rust",
+            "id call:display member:ok call:read_to_string",
+            &["repo-a", "repo-b"],
+        );
+        let b = cluster(
+            "toolbuild-bbb",
+            "rust",
+            "id call:display member:ok call:read_to_string",
+            &["repo-c", "repo-d"],
+        );
+        let families = group_pattern_families(&[a, b]);
+        assert_eq!(families.len(), 2, "stdlib plumbing is not a shared pattern");
+        for family in &families {
+            assert_eq!(family.label, "rust pattern");
+        }
     }
 
     #[test]
