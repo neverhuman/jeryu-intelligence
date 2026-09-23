@@ -14,9 +14,9 @@
 //! `Err` on read, not a panic.
 
 use crate::seam::{LedgerFilter, SeamError, SeamResult, VerdictLedger};
-use crate::signing::{EdSigningKey, Signature};
 use crate::types::{GateDecision, LaunchLedgerEntry, LedgerKind, SchemaTag, VibeGateVerdict};
 use async_trait::async_trait;
+use jeryu_signing::{EdSigningKey, Signature};
 use std::sync::{Arc, Mutex};
 
 /// In-memory, append-only, signed ledger. Cheap to clone (shared `Arc`).

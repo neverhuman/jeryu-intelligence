@@ -7,7 +7,7 @@
 
 use chrono::Utc;
 use jeryu_review::schema::*;
-use jeryu_review::signing::Signature;
+use jeryu_signing::Signature;
 
 pub fn assets_prompts_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets")

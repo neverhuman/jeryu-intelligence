@@ -34,7 +34,6 @@ pub mod prompt_builder;
 pub mod rejudge;
 pub mod reviewers;
 pub mod schema;
-pub mod signing;
 
 #[cfg(test)]
 mod test_support;
@@ -45,6 +44,7 @@ pub use approval::{
     QuorumDecision, QuorumOutcome, ShaBindError, evaluate_quorum, verify_sha_binding,
 };
 pub use conditions::{ConditionRegistry, HardStop};
+pub use jeryu_signing::{EdSigningKey, EdVerifier, Signature, sha256_digest};
 pub use judge::{JudgeInputs, JudgeOutcome, judge, mint_verdict_id};
 pub use orchestrator::{
     ESTIMATED_REVIEWER_COST_MICRO_USD, FakeReviewerOrchestrator, ProductionReviewerOrchestrator,
@@ -61,4 +61,3 @@ pub use schema::{
     AgentApprovalReceipt, EvidencePack, Finding, GateDecision, ReviewDecision, ReviewerRole,
     RiskTier, Severity, TokenCounts, VerdictReceiptRef, VibeGateVerdict,
 };
-pub use signing::{EdSigningKey, EdVerifier, Signature, sha256_digest};

@@ -46,8 +46,8 @@ pub use deterministic::DeterministicReviewer;
 mod deterministic {
     use super::*;
     use crate::schema::{ReviewDecision, SchemaTag, TokenCounts};
-    use crate::signing::Signature;
     use chrono::Utc;
+    use jeryu_signing::Signature;
 
     /// Deterministic reviewer for tests: returns a fixed decision and binds the
     /// receipt to the pack's `(id, head_sha, policy_sha)` tuple.

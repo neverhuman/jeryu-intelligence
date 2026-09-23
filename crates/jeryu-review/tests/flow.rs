@@ -15,7 +15,7 @@ use jeryu_review::llm::{
 use jeryu_review::orchestrator::{ProductionReviewerOrchestrator, ReviewerOrchestrator};
 use jeryu_review::policy::PolicyBundle;
 use jeryu_review::schema::{GateDecision, ReviewerRole, RiskTier, ScanOutcome};
-use jeryu_review::signing::EdSigningKey;
+use jeryu_signing::EdSigningKey;
 use std::sync::Arc;
 
 /// Deterministic provider that returns a fixed receipt JSON for every call.

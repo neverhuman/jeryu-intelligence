@@ -12,8 +12,8 @@ use crate::schema::{
     RollbackStrategy, ScanOutcome, SchemaTag, SecuritySection, SupplyChainSection, TestsSection,
     TokenCounts,
 };
-use crate::signing::Signature;
 use chrono::Utc;
+use jeryu_signing::Signature;
 
 /// Mint an evidence pack at a risk tier. `signed` controls whether the pack
 /// carries an ed25519 signature (so `evidence_signature_invalid` accepts it);

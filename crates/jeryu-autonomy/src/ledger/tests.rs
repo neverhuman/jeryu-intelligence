@@ -1,7 +1,7 @@
 use super::*;
-use crate::signing::EdSigningKey;
 use crate::types::{RiskTier, VerdictReceiptRef};
 use chrono::{Duration, Utc};
+use jeryu_signing::EdSigningKey;
 
 fn signed_entry(id: &str, kind: LedgerKind) -> LaunchLedgerEntry {
     let key = EdSigningKey::generate("test-agent");

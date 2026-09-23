@@ -2,8 +2,8 @@
 //! in the launch ledger, plus the closed set of ledger event kinds.
 
 use super::schema_tag::{LaunchLedgerEntryTag, SchemaTag};
-use crate::signing::Signature;
 use chrono::{DateTime, Utc};
+use jeryu_signing::Signature;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

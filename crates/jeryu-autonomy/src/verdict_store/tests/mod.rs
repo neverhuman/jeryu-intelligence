@@ -6,8 +6,8 @@ mod query;
 mod save;
 
 use super::*;
-use crate::signing::Signature;
 use crate::types::{RiskTier, SchemaTag, VerdictReceiptRef, VibeGateVerdict};
+use jeryu_signing::Signature;
 
 /// Shared fixture: mint a fully-populated verdict with a deterministic id
 /// derived from the creation timestamp and head-SHA tail.

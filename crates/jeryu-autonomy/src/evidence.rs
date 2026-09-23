@@ -4,12 +4,12 @@
 //! pipeline: change list, scanner outcomes, the proof/CI-lane receipt slice,
 //! and a SHA-stamped evidence digest.
 
-use crate::signing::sha256_digest;
 use crate::types::{
     ChangedFile, CiCheck, EvidencePack, GateReceipt, RiskTier, RollbackSection, SchemaTag,
     SecuritySection, SupplyChainSection, TestsSection,
 };
 use chrono::{DateTime, Utc};
+use jeryu_signing::sha256_digest;
 
 pub struct EvidenceInputs<'a> {
     pub repo: &'a str,

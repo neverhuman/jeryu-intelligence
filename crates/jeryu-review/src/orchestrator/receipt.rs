@@ -9,8 +9,8 @@
 
 use crate::reviewers::runner::ReviewerRoleId;
 use crate::schema::{AgentApprovalReceipt, ReviewDecision, ReviewerRole, SchemaTag, TokenCounts};
-use crate::signing::{EdSigningKey, Signature};
 use chrono::Utc;
+use jeryu_signing::{EdSigningKey, Signature};
 
 pub(super) fn receipt_role_to_id(role: ReviewerRole) -> ReviewerRoleId {
     match role {

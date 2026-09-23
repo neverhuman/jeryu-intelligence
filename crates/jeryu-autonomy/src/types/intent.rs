@@ -3,8 +3,8 @@
 
 use super::common::RiskTier;
 use super::schema_tag::{IntentCardTag, SchemaTag};
-use crate::signing::Signature;
 use chrono::{DateTime, Utc};
+use jeryu_signing::Signature;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

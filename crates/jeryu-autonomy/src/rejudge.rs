@@ -111,9 +111,9 @@ pub fn must_rejudge(verdict: &VibeGateVerdict, live: &LiveState<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signing::Signature;
     use crate::types::{GateDecision, RiskTier, SchemaTag, VerdictReceiptRef, VibeGateVerdict};
     use chrono::Duration;
+    use jeryu_signing::Signature;
 
     fn fresh_verdict() -> VibeGateVerdict {
         let now = Utc::now();

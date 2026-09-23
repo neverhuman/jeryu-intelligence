@@ -14,9 +14,9 @@
 
 use crate::ledger::sign_entry;
 use crate::seam::{SeamError, SeamResult, VerdictLedger};
-use crate::signing::{EdSigningKey, Signature};
 use crate::types::{GateDecision, LaunchLedgerEntry, LedgerKind, SchemaTag};
 use chrono::{DateTime, Duration, Utc};
+use jeryu_signing::{EdSigningKey, Signature};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 

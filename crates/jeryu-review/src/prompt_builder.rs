@@ -9,7 +9,7 @@
 //! `sha256:` prefix are frozen.
 
 use crate::llm::ChatMessage;
-use crate::signing::sha256_digest;
+use jeryu_signing::sha256_digest;
 
 pub struct ReviewerPromptInputs<'a> {
     pub system_prompt_markdown: &'a str,

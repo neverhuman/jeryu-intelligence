@@ -20,8 +20,8 @@ use crate::policy::PolicyBundle;
 use crate::schema::{
     AgentApprovalReceipt, EvidencePack, GateDecision, SchemaTag, VerdictReceiptRef, VibeGateVerdict,
 };
-use crate::signing::Signature;
 use chrono::{Duration, Utc};
+use jeryu_signing::Signature;
 
 pub struct JudgeInputs<'a> {
     pub pack: &'a EvidencePack,

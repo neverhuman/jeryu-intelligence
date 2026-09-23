@@ -22,9 +22,9 @@ use crate::reviewers::runtime::{RuntimeReviewInputs, run_runtime_review};
 use crate::reviewers::security::{SecurityReviewInputs, run_security_review};
 use crate::reviewers::test_integrity::{TestIntegrityReviewInputs, run_test_integrity_review};
 use crate::schema::{AgentApprovalReceipt, EvidencePack, ReviewerRole};
-use crate::signing::EdSigningKey;
 use anyhow::Result;
 use async_trait::async_trait;
+use jeryu_signing::EdSigningKey;
 use std::path::PathBuf;
 use std::sync::Arc;
 

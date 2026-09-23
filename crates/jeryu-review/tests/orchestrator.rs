@@ -9,7 +9,7 @@ use jeryu_review::orchestrator::{
     FakeReviewerOrchestrator, ProductionReviewerOrchestrator, ReviewerOrchestrator,
 };
 use jeryu_review::schema::{ReviewDecision, ReviewerRole};
-use jeryu_review::signing::{EdSigningKey, Signature};
+use jeryu_signing::{EdSigningKey, Signature};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;

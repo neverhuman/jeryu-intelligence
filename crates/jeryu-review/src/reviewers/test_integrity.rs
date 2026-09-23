@@ -4,7 +4,7 @@
 use crate::llm::LlmRouter;
 use crate::reviewers::runner::{ReviewInputs, ReviewerCallError, ReviewerRoleId, run_review};
 use crate::schema::AgentApprovalReceipt;
-use crate::signing::EdSigningKey;
+use jeryu_signing::EdSigningKey;
 
 pub struct TestIntegrityReviewInputs<'a> {
     pub repo: &'a str,

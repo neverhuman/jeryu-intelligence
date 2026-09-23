@@ -12,8 +12,8 @@ pub use tag::{
     AgentApprovalReceiptTag, EvidencePackTag, SchemaKind, SchemaTag, VibeGateVerdictTag,
 };
 
-use crate::signing::Signature;
 use chrono::{DateTime, Utc};
+use jeryu_signing::Signature;
 use serde::{Deserialize, Serialize};
 
 /// Risk tier ladder. Lower tiers are auto-merge-eligible; higher tiers require

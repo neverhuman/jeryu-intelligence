@@ -11,9 +11,9 @@ use crate::kill_bell::KillBell;
 use crate::ledger::MemoryLedger;
 use crate::policy_yaml::{PolicyBundle, fixtures};
 use crate::seam::VerdictLedger;
-use crate::signing::{EdSigningKey, Signature};
 use crate::types::*;
 use chrono::Utc;
+use jeryu_signing::{EdSigningKey, Signature};
 use std::sync::Arc;
 
 use crate::test_support::{bundle, pack_at_tier};

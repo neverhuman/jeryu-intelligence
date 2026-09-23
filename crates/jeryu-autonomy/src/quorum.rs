@@ -159,9 +159,9 @@ pub fn evaluate_quorum(
 mod tests {
     use super::*;
     use crate::policy_yaml::{ApprovalRules, QuorumEntry};
-    use crate::signing::Signature;
     use crate::types::*;
     use chrono::Utc;
+    use jeryu_signing::Signature;
     use std::collections::HashMap;
 
     fn receipt(role: ReviewerRole, agent: &str, decision: ReviewDecision) -> AgentApprovalReceipt {

@@ -1,7 +1,7 @@
 use super::*;
-use crate::signing::Signature;
 use crate::types::*;
 use chrono::Utc;
+use jeryu_signing::Signature;
 
 fn pack_with_security(sast: ScanOutcome, dep: ScanOutcome, sec: ScanOutcome) -> EvidencePack {
     EvidencePack {

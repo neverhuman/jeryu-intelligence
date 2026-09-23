@@ -42,7 +42,6 @@ pub mod quorum;
 pub mod rejudge;
 pub mod seam;
 pub mod sha_bind;
-pub mod signing;
 pub mod types;
 pub mod verdict_store;
 
@@ -65,6 +64,7 @@ pub use freeze::{FreezeWindow, FreezeWindows};
 pub use full_auto::{
     FULL_AUTO_MAX_AUTO_TIER, FULL_AUTO_SCHEMA, FullAutoDescriptor, FullAutoError, FullAutoProfile,
 };
+pub use jeryu_signing::{EdSigningKey, EdVerifier, Signature, SigningKey, sha256_digest};
 pub use judge::{JudgeInputs, JudgeOutcome, judge};
 pub use kill_bell::{BreakGlassReceipt, KillBell, KillBellState};
 pub use ledger::{
@@ -80,7 +80,6 @@ pub use seam::{
     VerdictStore,
 };
 pub use sha_bind::{ShaBindError, verify_sha_binding};
-pub use signing::{EdSigningKey, EdVerifier, Signature, SigningKey, sha256_digest};
 pub use types::{
     AgentApprovalReceipt, CapabilityLease, ChangedFile, CiCheck, CiConclusion, EvidencePack,
     Finding, GateDecision, GateReceipt, IntentCard, LaunchLedgerEntry, LeaseDenied, LeaseScope,

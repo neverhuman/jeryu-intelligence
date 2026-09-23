@@ -47,8 +47,8 @@ pub(super) fn true_default() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signing::Signature;
     use chrono::{DateTime, Utc};
+    use jeryu_signing::Signature;
 
     fn now() -> DateTime<Utc> {
         Utc::now()

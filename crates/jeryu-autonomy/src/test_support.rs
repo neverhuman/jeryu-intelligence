@@ -7,8 +7,8 @@
 
 use crate::evidence::{EvidenceInputs, build_evidence_pack};
 use crate::policy_yaml::{PolicyBundle, fixtures};
-use crate::signing::Signature;
 use crate::types::*;
+use jeryu_signing::Signature;
 
 /// The default policy bundle shared by the unit suites.
 pub(crate) fn bundle() -> PolicyBundle {

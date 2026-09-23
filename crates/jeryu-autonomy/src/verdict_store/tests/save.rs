@@ -160,7 +160,7 @@ async fn body_json_is_source_of_truth_after_round_trip() {
 
 #[tokio::test]
 async fn save_with_unsigned_verdict_succeeds_for_replay_use_case() {
-    use crate::signing::Signature;
+    use jeryu_signing::Signature;
     let store = MemoryVerdictStore::new();
     let now = Utc::now();
     let mut v = mint_verdict(

@@ -51,9 +51,9 @@ pub fn verify_sha_binding(
 mod tests {
     use super::*;
     use crate::evidence::{EvidenceInputs, build_evidence_pack};
-    use crate::signing::Signature;
     use crate::types::*;
     use chrono::Utc;
+    use jeryu_signing::Signature;
 
     fn pack() -> EvidencePack {
         let (h, b, c) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));

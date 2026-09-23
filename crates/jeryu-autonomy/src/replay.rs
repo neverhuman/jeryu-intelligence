@@ -92,9 +92,9 @@ fn build_report(subject_id: &str, mut entries: Vec<LaunchLedgerEntry>) -> Replay
 mod tests {
     use super::*;
     use crate::ledger::{MemoryLedger, sign_entry};
-    use crate::signing::{EdSigningKey, Signature};
     use crate::types::SchemaTag;
     use chrono::Duration;
+    use jeryu_signing::{EdSigningKey, Signature};
 
     fn entry(
         id: &str,

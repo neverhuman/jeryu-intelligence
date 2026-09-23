@@ -5,6 +5,14 @@ source ops/ci/lib.sh
 bash ops/ci/test-governed-jankurai-path.sh
 if [[ -f Cargo.toml ]]; then
   cargo metadata --format-version 1 --no-deps >/dev/null
+  # The signing primitives have one owner: the jeryu-signing crate in
+  # jeryu-release-ops. Every consumer here binds to it by pinned tag, so a
+  # second in-workspace copy of the ed25519/HMAC/digest code would let the two
+  # drift apart and break replay of historical signatures.
+  if grep -rn -E '^(ed25519|ed25519-dalek|hmac|sha2) *=' Cargo.toml crates/*/Cargo.toml; then
+    echo "signing primitives belong to jeryu-signing; depend on that crate instead" >&2
+    exit 1
+  fi
   if [[ "${JERYU_SPLIT_FULL_CHECK:-0}" == "1" ]]; then
     cargo check --workspace --all-targets --jobs "${JERYU_CI_JOBS:-40}"
   fi

@@ -29,10 +29,10 @@ pub use payload::build_payload;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signing::Signature;
     use crate::types::{GateDecision, RiskTier, SchemaTag, VerdictReceiptRef, VibeGateVerdict};
     use async_trait::async_trait;
     use chrono::{TimeZone, Utc};
+    use jeryu_signing::Signature;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 

@@ -1,8 +1,8 @@
 use super::*;
 use crate::conditions::HardStop;
-use crate::signing::Signature;
 use crate::types::*;
 use chrono::Utc;
+use jeryu_signing::Signature;
 
 use crate::test_support::{bundle, pack_at_tier};
 

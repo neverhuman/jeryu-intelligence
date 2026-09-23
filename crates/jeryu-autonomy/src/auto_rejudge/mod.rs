@@ -16,10 +16,10 @@ use crate::judge::{JudgeInputs, judge};
 use crate::ledger::sign_entry;
 use crate::policy_yaml::PolicyBundle;
 use crate::seam::{EvidenceSource, SeamError, SeamResult, VerdictLedger, VerdictStore};
-use crate::signing::{EdSigningKey, Signature};
 use crate::types::{
     GateDecision, LaunchLedgerEntry, LedgerKind, ReviewerRole, SchemaTag, VibeGateVerdict,
 };
+use jeryu_signing::{EdSigningKey, Signature};
 use serde_json::json;
 use std::sync::Arc;
 

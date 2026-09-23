@@ -25,11 +25,11 @@ use verdict_id::mint_verdict_id;
 use crate::conditions::{ConditionRegistry, ci_hard_stops};
 use crate::quorum::{QuorumDecision, evaluate_quorum};
 use crate::sha_bind::verify_sha_binding;
-use crate::signing::Signature;
 use crate::types::{
     AgentApprovalReceipt, GateDecision, SchemaTag, VerdictReceiptRef, VibeGateVerdict,
 };
 use chrono::{Duration, Utc};
+use jeryu_signing::Signature;
 
 pub fn judge(inputs: JudgeInputs<'_>) -> JudgeOutcome {
     // 1. SHA-bind filter.

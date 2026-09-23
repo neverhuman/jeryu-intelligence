@@ -16,8 +16,8 @@ use crate::prompt_builder::{ReviewerPromptInputs, build_reviewer_messages, promp
 use crate::schema::{
     AgentApprovalReceipt, Finding, ReviewDecision, ReviewerRole, SchemaTag, Severity, TokenCounts,
 };
-use crate::signing::{EdSigningKey, Signature};
 use chrono::Utc;
+use jeryu_signing::{EdSigningKey, Signature};
 use serde::Deserialize;
 
 #[derive(Debug, thiserror::Error)]

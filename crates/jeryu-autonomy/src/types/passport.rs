@@ -7,8 +7,8 @@
 
 use super::schema_tag::{MergePassportTag, ReleasePassportTag, SchemaTag};
 use super::true_default;
-use crate::signing::Signature;
 use chrono::{DateTime, Utc};
+use jeryu_signing::Signature;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
