@@ -25,8 +25,16 @@ pub struct ScrubReport {
 /// (a safe read); tests exercise the skip path via [`scrub_diff_with_skip`] so
 /// they never mutate process-global env (which is `unsafe` in edition 2024).
 pub fn scrub_diff(diff: &str) -> ScrubReport {
-    let skip = std::env::var("JERYU_LLM_SCRUB_SKIP").as_deref() == Ok("1");
+    let skip = skip_requested(std::env::var("JERYU_LLM_SCRUB_SKIP").ok().as_deref());
     scrub_diff_with_skip(diff, skip)
+}
+
+/// Pure skip-flag predicate. Only a literal `1` opts out; anything else —
+/// unset, empty, `0`, `true`, a typo — keeps the scrubber on. Pure so it is
+/// unit-tested without mutating shared process env (`unsafe` in edition 2024,
+/// and a race against every other test in the binary).
+fn skip_requested(value: Option<&str>) -> bool {
+    matches!(value, Some("1"))
 }
 
 /// Skip-explicit core. Production reads the env flag in [`scrub_diff`]; callers
@@ -117,6 +125,37 @@ mod tests {
         let r = scrub_diff_with_skip(&diff, false);
         assert!(!r.passed);
         assert_eq!(r.findings[0].kind, "aws-access-key-id");
+    }
+
+    #[test]
+    fn scrubbing_is_on_by_default() {
+        // No env override in a normal (and every CI) process: scrub_diff itself
+        // — the entry point reviewers call — must catch the secret.
+        assert!(
+            std::env::var_os("JERYU_LLM_SCRUB_SKIP").is_none(),
+            "JERYU_LLM_SCRUB_SKIP must not be set in a test or CI environment"
+        );
+        let diff = format!("+ const KEY: &str = \"{}{}\";", "AKIA", "IOSFODNN7EXAMPLE");
+        let r = scrub_diff(&diff);
+        assert!(!r.passed, "default posture is fail-closed");
+        assert_eq!(r.tool, "regex-scanner");
+        assert_eq!(r.findings[0].kind, "aws-access-key-id");
+
+        let clean = scrub_diff("+ fn add(a: i32, b: i32) -> i32 { a + b }");
+        assert!(clean.passed);
+        assert_eq!(clean.tool, "regex-scanner");
+    }
+
+    #[test]
+    fn only_the_literal_one_turns_the_scrubber_off() {
+        assert!(!skip_requested(None), "unset -> scrub");
+        assert!(!skip_requested(Some("")));
+        assert!(!skip_requested(Some("0")));
+        assert!(!skip_requested(Some("true")));
+        assert!(!skip_requested(Some("yes")));
+        assert!(!skip_requested(Some("2")));
+        assert!(!skip_requested(Some(" 1")));
+        assert!(skip_requested(Some("1")), "the one opt-in");
     }
 
     #[test]
