@@ -588,7 +588,7 @@ fn sanitize_id(value: &str) -> String {
 }
 
 /// Query accepted by the compatibility REST/MCP oracle.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodegraphQuery {
     /// Repo-relative changed paths to analyze for impact.
     #[serde(default)]
@@ -602,6 +602,19 @@ pub struct CodegraphQuery {
     /// Limit for symbol search results.
     #[serde(default = "default_limit")]
     pub limit: usize,
+}
+
+impl Default for CodegraphQuery {
+    /// Matches what deserializing `{}` yields, so a hand-built query and a
+    /// wire query ask for the same number of results.
+    fn default() -> Self {
+        Self {
+            changed_paths: Vec::new(),
+            symbol: None,
+            crate_name: None,
+            limit: default_limit(),
+        }
+    }
 }
 
 /// Oracle response consumed by older codegraph clients and newer agent repair flows.
@@ -793,5 +806,565 @@ impl From<CodeGraphError> for CodegraphMiss {
             &error.to_string(),
             "rerun `jeryu-codegraph index`, then rerun the codegraph oracle proof lane",
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_root(tag: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codegraph-oracle-{tag}-{nanos}"));
+        std::fs::create_dir_all(&root).expect("temp root");
+        root
+    }
+
+    fn write(root: &std::path::Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(path, contents).expect("write");
+    }
+
+    /// A repo root carrying the governance files the oracle reads.
+    fn governed_root(tag: &str) -> PathBuf {
+        let root = tmp_root(tag);
+        write(&root, "AGENTS.md", "# rules\n");
+        write(
+            &root,
+            "agent/owner-map.json",
+            r#"{"owners": {"crates/core/": "core-team", "crates/": "platform"}}"#,
+        );
+        write(
+            &root,
+            "agent/test-map.json",
+            r#"{"tests": {"crates/core/": {"command": "cargo test -p core_lib",
+                 "purpose": "prove the core crate", "lane": "check"}}}"#,
+        );
+        write(
+            &root,
+            "agent/generated-zones.toml",
+            "[[zones]]\npath = \"crates/core/src/generated/\"\ngenerator = \"just score\"\nmanual_edits = false\n",
+        );
+        write(
+            &root,
+            "agent/proof-lanes.toml",
+            "[lanes.check]\nrequired = [\"just check\"]\nblocks_merge = true\n",
+        );
+        write(&root, "crates/core/src/lib.rs", "pub fn core_api() {}\n");
+        write(
+            &root,
+            "crates/core/src/generated/table.rs",
+            "// generated\n",
+        );
+        write(
+            &root,
+            "crates/api/src/retry_policy.rs",
+            "pub fn retry() {}\n",
+        );
+        root
+    }
+
+    fn governance(tag: &str) -> (PathBuf, GovernanceMetadata) {
+        let root = governed_root(tag);
+        let metadata = GovernanceMetadata::load(&root).expect("governance");
+        (root, metadata)
+    }
+
+    fn symbol(crate_name: &str, file: &str, symbol: &str) -> SymbolRow {
+        SymbolRow {
+            crate_name: crate_name.to_string(),
+            file: file.to_string(),
+            symbol: symbol.to_string(),
+            kind: "public".to_string(),
+            is_public: true,
+            line: 1,
+        }
+    }
+
+    fn snapshot() -> GraphSnapshot {
+        GraphSnapshot {
+            symbols: vec![
+                symbol("core_lib", "crates/core/src/lib.rs", "core_api"),
+                symbol("api_lib", "crates/api/src/lib.rs", "api_entry"),
+            ],
+            crate_deps: vec![crate::storage::CrateDepRow {
+                crate_name: "api_lib".to_string(),
+                depends_on: "core_lib".to_string(),
+            }],
+            symbol_refs: vec![SymbolRefRow {
+                crate_name: "core_lib".to_string(),
+                file: "crates/core/src/lib.rs".to_string(),
+                symbol: "core_api".to_string(),
+                ref_file: "crates/api/src/lib.rs".to_string(),
+                ref_line: 4,
+                ref_kind: "call".to_string(),
+            }],
+            ..GraphSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn changed_paths_are_normalized_sorted_and_deduplicated() {
+        let paths = normalize_changed_paths(&[
+            "  crates/api/src/lib.rs  ".to_string(),
+            "./crates/api/src/lib.rs".to_string(),
+            "crates\\core\\src\\lib.rs".to_string(),
+            "   ".to_string(),
+            String::new(),
+        ]);
+        assert_eq!(
+            paths,
+            vec![
+                "crates/api/src/lib.rs".to_string(),
+                "crates/core/src/lib.rs".to_string(),
+            ]
+        );
+        assert!(normalize_changed_paths(&[]).is_empty());
+    }
+
+    #[test]
+    fn run_ids_keep_only_characters_that_are_safe_in_an_id() {
+        assert_eq!(sanitize_id("jeryu/intelligence"), "jeryu-intelligence");
+        assert_eq!(sanitize_id("repo-1"), "repo-1");
+        assert_eq!(sanitize_id("a b.c_d"), "a-b-c-d");
+        assert!(epoch_millis() > 0);
+    }
+
+    #[test]
+    fn the_workspace_manifest_path_follows_the_relative_root() {
+        assert_eq!(manifest_relative_path("."), "Cargo.toml");
+        assert_eq!(manifest_relative_path(""), "Cargo.toml");
+        assert_eq!(
+            manifest_relative_path("crates/core"),
+            "crates/core/Cargo.toml"
+        );
+    }
+
+    #[test]
+    fn lexical_tokens_drop_short_words_and_task_vocabulary() {
+        let query = CodeGraphQuery {
+            intent: Some("Change the RETRY policy".to_string()),
+            question: Some("which files own backoff?".to_string()),
+            ..CodeGraphQuery::default()
+        };
+        let tokens = lexical_tokens(&query);
+        assert!(tokens.contains("retry"), "{tokens:?}");
+        assert!(tokens.contains("policy"));
+        assert!(tokens.contains("backoff"));
+        // "change", "which" and "files" are task vocabulary; "the" is too short.
+        for noise in ["change", "which", "files", "the"] {
+            assert!(!tokens.contains(noise), "{noise} is not a code token");
+        }
+        assert!(lexical_tokens(&CodeGraphQuery::default()).is_empty());
+    }
+
+    #[test]
+    fn lexical_matches_are_reported_as_excluded_not_as_context() {
+        let (root, governance) = governance("lexical");
+        let query = CodeGraphQuery {
+            intent: Some("tune retry_policy".to_string()),
+            ..CodeGraphQuery::default()
+        };
+        let empty = BTreeMap::new();
+        let excluded = lexical_exclusions(&query, &empty, &empty, &governance);
+        let paths: Vec<&str> = excluded.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(paths, vec!["crates/api/src/retry_policy.rs"]);
+        assert_eq!(excluded[0].reason, "heuristic_only_lexical_match");
+        assert_eq!(excluded[0].provenance[0].source, "lexical_fallback");
+
+        // A file already carried as context is never also reported as excluded.
+        let mut must = BTreeMap::new();
+        insert_context(
+            &mut must,
+            "crates/api/src/retry_policy.rs",
+            0,
+            "changed_path",
+            "changed by the task",
+            &governance,
+            None,
+        );
+        assert!(lexical_exclusions(&query, &must, &empty, &governance).is_empty());
+
+        // No lexical tokens, no exclusions to report.
+        assert!(
+            lexical_exclusions(&CodeGraphQuery::default(), &empty, &empty, &governance).is_empty()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn context_entries_merge_reasons_and_keep_the_strongest_rank() {
+        let (root, governance) = governance("context");
+        let mut files = BTreeMap::new();
+        insert_context(
+            &mut files,
+            "crates/core/src/lib.rs",
+            2,
+            "affected_crate",
+            "crate is downstream of the change",
+            &governance,
+            None,
+        );
+        insert_context(
+            &mut files,
+            "crates/core/src/lib.rs",
+            0,
+            "changed_path",
+            "changed by the task",
+            &governance,
+            None,
+        );
+        insert_context(
+            &mut files,
+            "crates/core/src/lib.rs",
+            1,
+            "changed_path",
+            "seen again",
+            &governance,
+            None,
+        );
+        let entry = &files["crates/core/src/lib.rs"];
+        assert_eq!(entry.rank, 0, "the strongest rank wins");
+        assert_eq!(
+            entry.reasons,
+            vec!["affected_crate".to_string(), "changed_path".to_string()],
+            "a repeated reason is recorded once"
+        );
+        assert_eq!(entry.provenance.len(), 3, "every inclusion leaves evidence");
+        // Governance fills the owner and lane when no indexed row exists. The
+        // longest matching owner rule wins over the broader one.
+        assert_eq!(entry.owner.as_deref(), Some("core-team"));
+        assert_eq!(entry.proof_lanes, vec!["check".to_string()]);
+        assert!(entry.editable);
+        assert!(entry.generated_zone.is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_generated_file_is_carried_as_context_but_not_as_editable() {
+        let (root, governance) = governance("generated");
+        let mut files = BTreeMap::new();
+        insert_context(
+            &mut files,
+            "crates/core/src/generated/table.rs",
+            1,
+            "changed_path",
+            "changed by the task",
+            &governance,
+            None,
+        );
+        let entry = &files["crates/core/src/generated/table.rs"];
+        assert!(!entry.editable, "a generated zone is not hand-edited");
+        assert_eq!(
+            entry
+                .generated_zone
+                .as_ref()
+                .map(|zone| zone.generator.as_str()),
+            Some("just score")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_indexed_row_wins_over_the_governance_fallback() {
+        let (root, governance) = governance("indexed-row");
+        let row = FileRow {
+            repo_id: "repo".to_string(),
+            commit_sha: "c1".to_string(),
+            path: "crates/core/src/lib.rs".to_string(),
+            crate_name: Some("core_lib".to_string()),
+            language: "rust".to_string(),
+            owner: Some("indexed-owner".to_string()),
+            test_lane: None,
+            proof_lanes: vec!["fast".to_string()],
+            generated_zone: None,
+            editable: false,
+            provenance_json: "[]".to_string(),
+        };
+        let mut files = BTreeMap::new();
+        insert_context(
+            &mut files,
+            "crates/core/src/lib.rs",
+            0,
+            "changed_path",
+            "changed by the task",
+            &governance,
+            Some(&row),
+        );
+        let entry = &files["crates/core/src/lib.rs"];
+        assert_eq!(entry.owner.as_deref(), Some("indexed-owner"));
+        assert!(!entry.editable);
+        // The row's lanes and the governed lane are unioned, sorted, deduped.
+        assert_eq!(
+            entry.proof_lanes,
+            vec!["check".to_string(), "fast".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn context_is_sorted_by_rank_then_path() {
+        let (root, governance) = governance("sorted");
+        let mut files = BTreeMap::new();
+        for (path, rank) in [
+            ("crates/api/src/retry_policy.rs", 1u32),
+            ("crates/core/src/lib.rs", 0),
+            ("AGENTS.md", 1),
+        ] {
+            insert_context(
+                &mut files,
+                path,
+                rank,
+                "reason",
+                "detail",
+                &governance,
+                None,
+            );
+        }
+        let paths: Vec<String> = sorted_context(files)
+            .into_iter()
+            .map(|file| file.path)
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "crates/core/src/lib.rs".to_string(),
+                "AGENTS.md".to_string(),
+                "crates/api/src/retry_policy.rs".to_string(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn proof_lanes_come_from_the_lane_rule_and_fall_back_to_the_test_command() {
+        let (root, governance) = governance("lanes");
+        let lanes = selected_proof_lanes(
+            &[
+                "crates/core/src/lib.rs".to_string(),
+                "crates/core/src/generated/table.rs".to_string(),
+                "crates/api/src/retry_policy.rs".to_string(),
+            ],
+            &governance,
+        );
+        assert_eq!(lanes.len(), 1, "an unmapped path selects no lane");
+        assert_eq!(lanes[0].lane, "check");
+        assert_eq!(lanes[0].required_commands, vec!["just check".to_string()]);
+        assert!(lanes[0].blocks_merge);
+        assert_eq!(lanes[0].provenance[0].source, "test_map");
+        assert!(lanes[0].reason.contains("crates/core/src/lib.rs"));
+
+        // Without a matching lane rule, the test-map command is the proof.
+        let mut orphaned = GovernanceMetadata::load(&root).expect("governance");
+        orphaned.proof_lanes.clear();
+        let lanes = selected_proof_lanes(&["crates/core/src/lib.rs".to_string()], &orphaned);
+        assert_eq!(
+            lanes[0].required_commands,
+            vec!["cargo test -p core_lib".to_string()]
+        );
+        assert!(!lanes[0].blocks_merge);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_symbols_owned_by_an_affected_crate_are_reported() {
+        let snapshot = snapshot();
+        let affected: BTreeSet<String> = ["core_lib".to_string()].into_iter().collect();
+        let impacts = affected_symbols(&snapshot.symbols, &affected);
+        assert_eq!(impacts.len(), 1);
+        assert_eq!(impacts[0].symbol, "core_api");
+        assert_eq!(impacts[0].provenance[0].source, "rust_public_symbol_index");
+        assert!(impacts[0].provenance[0].detail.contains("core_lib"));
+        assert!(affected_symbols(&snapshot.symbols, &BTreeSet::new()).is_empty());
+    }
+
+    #[test]
+    fn a_changed_path_resolves_to_its_owning_crate() {
+        let snapshot = snapshot();
+        assert_eq!(
+            crate_from_path("crates/core/src/lib.rs", &snapshot),
+            Some("core_lib".to_string())
+        );
+        assert_eq!(
+            crate_from_path("crates/core/src/handler.rs", &snapshot),
+            Some("core_lib".to_string()),
+            "a sibling file belongs to the same crate"
+        );
+        assert_eq!(crate_from_path("docs/readme.md", &snapshot), None);
+    }
+
+    #[test]
+    fn a_snapshot_query_answers_symbol_crate_and_path_questions() {
+        let pack = query_snapshot(
+            snapshot(),
+            "5".to_string(),
+            &CodegraphQuery {
+                changed_paths: vec!["crates/core/src/lib.rs".to_string()],
+                symbol: Some("core_api".to_string()),
+                crate_name: Some("core_lib".to_string()),
+                limit: default_limit(),
+            },
+        );
+        assert_eq!(pack.schema_version, "codegraph.query/v1");
+        assert_eq!(pack.provenance.storage_schema, "5");
+        assert_eq!(
+            pack.definition.as_ref().map(|row| row.symbol.as_str()),
+            Some("core_api")
+        );
+        assert_eq!(pack.reverse_deps, vec!["api_lib".to_string()]);
+        assert_eq!(
+            pack.impact.changed_crates,
+            ["core_lib".to_string()].into_iter().collect()
+        );
+        assert_eq!(
+            pack.impact.affected_crates,
+            ["api_lib".to_string(), "core_lib".to_string()]
+                .into_iter()
+                .collect(),
+            "dependents of a changed crate are affected too"
+        );
+        assert!(pack.impact.affected_symbols.contains("api_entry"));
+        // Changed paths, the definition site and every reference, once each.
+        assert_eq!(
+            pack.required_reads,
+            vec![
+                "crates/api/src/lib.rs".to_string(),
+                "crates/core/src/lib.rs".to_string(),
+            ]
+        );
+        assert!(pack.misses.is_empty());
+        assert!(!pack.proof_lanes.is_empty());
+        assert!(!pack.suggested_commands.is_empty());
+    }
+
+    #[test]
+    fn an_empty_query_asks_nothing_and_misses_nothing() {
+        let pack = query_snapshot(snapshot(), "5".to_string(), &CodegraphQuery::default());
+        assert!(pack.symbols.is_empty());
+        assert!(pack.definition.is_none());
+        assert!(pack.references.is_empty());
+        assert!(pack.reverse_deps.is_empty());
+        assert!(pack.required_reads.is_empty());
+        assert!(pack.misses.is_empty(), "nothing was asked, nothing missed");
+    }
+
+    #[test]
+    fn unresolved_questions_come_back_as_repairable_misses() {
+        let pack = query_snapshot(
+            snapshot(),
+            "5".to_string(),
+            &CodegraphQuery {
+                symbol: Some("absent_symbol".to_string()),
+                crate_name: Some("api_lib".to_string()),
+                limit: 5,
+                ..CodegraphQuery::default()
+            },
+        );
+        let codes: Vec<&str> = pack.misses.iter().map(|miss| miss.code.as_str()).collect();
+        assert_eq!(
+            codes,
+            vec!["codegraph_symbol_miss", "codegraph_reverse_deps_empty"]
+        );
+        for miss in &pack.misses {
+            assert!(!miss.repair_hint.is_empty());
+            assert!(!miss.common_fixes.is_empty());
+            assert_eq!(miss.docs_url, "docs/errors.md#not-found");
+        }
+    }
+
+    #[test]
+    fn a_storage_failure_is_reported_as_a_miss_a_caller_can_act_on() {
+        let miss = CodegraphMiss::from(CodeGraphError::Storage("disk is gone".to_string()));
+        assert_eq!(miss.code, "codegraph_storage_error");
+        assert!(miss.reason.contains("disk is gone"));
+        assert!(miss.repair_hint.contains("jeryu-codegraph index"));
+    }
+
+    #[test]
+    fn a_query_without_a_limit_deserializes_to_the_default() {
+        let query: CodegraphQuery = serde_json::from_str("{}").expect("parse");
+        assert_eq!(query.limit, 20);
+        assert_eq!(
+            query,
+            CodegraphQuery::default(),
+            "a hand-built query asks for as much as a wire query"
+        );
+    }
+
+    #[test]
+    fn governance_rows_are_attached_to_every_indexed_and_loaded_file() {
+        let (root, metadata) = governance("attach");
+        let mut snapshot = GraphSnapshot {
+            files: vec![FileRow {
+                repo_id: String::new(),
+                commit_sha: String::new(),
+                path: "crates/core/src/generated/table.rs".to_string(),
+                crate_name: Some("core_lib".to_string()),
+                language: "rust".to_string(),
+                owner: None,
+                test_lane: None,
+                proof_lanes: Vec::new(),
+                generated_zone: None,
+                editable: true,
+                provenance_json: String::new(),
+            }],
+            ..GraphSnapshot::default()
+        };
+        attach_governance_rows(
+            &mut snapshot,
+            &metadata,
+            &CodeGraphRepoIdentity::from_repo_string("repo"),
+            "c1",
+        );
+
+        let indexed = snapshot
+            .files
+            .iter()
+            .find(|file| file.path == "crates/core/src/generated/table.rs")
+            .expect("indexed file");
+        assert_eq!(indexed.repo_id, "repo");
+        assert_eq!(indexed.commit_sha, "c1");
+        assert_eq!(indexed.owner.as_deref(), Some("core-team"));
+        assert_eq!(indexed.test_lane.as_deref(), Some("check"));
+        assert_eq!(indexed.proof_lanes, vec!["check".to_string()]);
+        assert!(!indexed.editable, "the file sits in a generated zone");
+        assert!(indexed.provenance_json.contains("rust_cargo_index"));
+
+        // Every governance file the loader read is carried as a row of its own.
+        let kinds: BTreeSet<&str> = snapshot
+            .governance
+            .iter()
+            .map(|row| row.kind.as_str())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "agents",
+                "generated_zones",
+                "owner_map",
+                "proof_lanes",
+                "test_map"
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert!(snapshot.governance.iter().all(|row| row.loaded));
+        assert!(
+            snapshot
+                .files
+                .iter()
+                .any(|file| file.path == "agent/owner-map.json" && file.language == "governance")
+        );
+        // Paths are sorted and never duplicated.
+        let paths: Vec<&str> = snapshot.files.iter().map(|f| f.path.as_str()).collect();
+        let mut sorted = paths.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(paths, sorted);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

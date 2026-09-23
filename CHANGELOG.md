@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- Tool-build clusters are ranked by the duplication a shared tool would remove
+  (one copy's tokens times the copies past the first), weighted by cross-repo
+  spread and by how many domain anchors the window carries, instead of by a
+  term that squared the occurrence count. Standard-library plumbing no longer
+  crowds out real shared-tool leads on the Intelligence and Shared tools pages.
+  The v1 compatibility scan keeps its pinned scores.
+- `jeryu-codegraph` storage, oracle and tool-build scan carry unit tests.
 - Signing consolidated on the `jeryu-signing` crate: the per-crate `signing`
   re-export modules in `jeryu-review` and `jeryu-autonomy` are gone and their
   duplicated primitive tests with them; `ops/ci/check.sh` now rejects a second

@@ -604,6 +604,80 @@ fn reconstruct_previews(
     out
 }
 
+/// Everything the v2 ranking reads about one cluster.
+pub(crate) struct ClusterScoreInput<'a> {
+    pub occurrence_count: usize,
+    pub repo_count: usize,
+    /// Normalized tokens, summed over occurrences.
+    pub token_total: usize,
+    /// Normalized preview of the window, mined for domain anchors.
+    pub preview: &'a str,
+}
+
+/// Cross-repo spread is worth this many percent per repo past the first.
+const REPO_SPREAD_BONUS_PCT: u64 = 25;
+/// Spread stops paying above this many extra repos.
+const MAX_REPO_SPREAD_STEPS: u64 = 8;
+/// A window with no domain anchor at all keeps this percent of its score.
+const NO_ANCHOR_PCT: u64 = 25;
+/// Each distinct domain anchor adds this percent, up to full score.
+const ANCHOR_STEP_PCT: u64 = 25;
+
+/// The frozen v1 ranking: repetition mass, files, lines. `token_total` already
+/// carries one window's tokens per occurrence, so this squares the occurrence
+/// count. Persisted v1 report bytes pin it; only the v1 path may use it.
+fn v1_score(
+    occurrence_count: usize,
+    token_total: usize,
+    file_count: usize,
+    total_lines: usize,
+) -> u64 {
+    (occurrence_count as u64)
+        .saturating_mul(token_total as u64)
+        .saturating_add((file_count as u64).saturating_mul(100))
+        .saturating_add(total_lines as u64)
+}
+
+/// Rank a v2 cluster by the duplication a shared tool would actually remove.
+///
+/// The v1 shape squares the occurrence count, so a short window repeated
+/// dozens of times inside one repo outranks a substantial helper duplicated
+/// across repos — which is how standard-library plumbing came to fill the top
+/// of the Intelligence and Shared tools pages. v2 instead scores one copy's
+/// token weight times the copies past the first (what extraction deletes),
+/// then weights that by how far the repetition spreads across repos and by how
+/// many distinct domain anchors the window carries. A window anchored only on
+/// `iter`/`collect`/`to_string` names the language, not a shared tool, so it
+/// keeps a quarter of its score and sinks below code that names a domain.
+pub(crate) fn cluster_score(input: &ClusterScoreInput<'_>) -> u64 {
+    let occurrences = input.occurrence_count.max(1) as u64;
+    let one_copy_tokens = (input.token_total as u64) / occurrences;
+    // The v1 file/line tails are deliberately gone: at 100 points per file
+    // they put a cluster's raw file count back on top of the ranking, which is
+    // the bias this scoring exists to remove. File and line spread stay in the
+    // report for the reader; ranking is about removable tokens.
+    let base = one_copy_tokens.saturating_mul(occurrences - 1);
+
+    let extra_repos = (input.repo_count.max(1) as u64 - 1).min(MAX_REPO_SPREAD_STEPS);
+    let repo_pct = 100 + REPO_SPREAD_BONUS_PCT.saturating_mul(extra_repos);
+
+    let anchors = distinct_domain_anchors(input.preview) as u64;
+    let anchor_pct = (NO_ANCHOR_PCT + ANCHOR_STEP_PCT.saturating_mul(anchors)).min(100);
+
+    base.saturating_mul(repo_pct)
+        .saturating_mul(anchor_pct)
+        .saturating_div(10_000)
+}
+
+/// How many distinct domain-meaningful anchor names the preview carries.
+fn distinct_domain_anchors(preview: &str) -> usize {
+    preview
+        .split_whitespace()
+        .filter_map(super::anchors::domain_anchor)
+        .collect::<BTreeSet<_>>()
+        .len()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_cluster(
     proto: &ProtoCluster,
@@ -658,10 +732,16 @@ fn build_cluster(
         .unwrap_or_else(|| "unknown".to_string());
     let file_count = files.len();
 
-    let mut score = (occurrence_count as u64)
-        .saturating_mul(token_total as u64)
-        .saturating_add((file_count as u64).saturating_mul(100))
-        .saturating_add(total_lines as u64);
+    let mut score = if options.compat_v1 {
+        v1_score(occurrence_count, token_total, file_count, total_lines)
+    } else {
+        cluster_score(&ClusterScoreInput {
+            occurrence_count,
+            repo_count: repos.len().max(1),
+            token_total,
+            preview: &recon.preview,
+        })
+    };
 
     let category = if options.compat_v1 {
         ToolBuildCategory::ToolCandidate
@@ -818,6 +898,50 @@ pub(crate) fn key_hex_prefix(key: u128) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ToolBuildScanConfig;
+
+    /// A window whose anchors are all standard-library plumbing.
+    const PLUMBING: &str = "call:iter call:collect\nmember:to_string call:unwrap";
+    /// A window that names a domain.
+    const DOMAIN: &str = "call:issue_token member:checksum\ncall:audit_log call:notify_subscribers";
+
+    fn score(occurrences: usize, repos: usize, tokens_per_copy: usize, preview: &str) -> u64 {
+        cluster_score(&ClusterScoreInput {
+            occurrence_count: occurrences,
+            repo_count: repos,
+            token_total: occurrences * tokens_per_copy,
+            preview,
+        })
+    }
+
+    fn tmp_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("codegraph-scan-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    fn write(root: &Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(path, contents).expect("write");
+    }
+
+    /// Dense duplicated body: clears the token, anchor and diversity floors.
+    const HANDLER: &str = r#"pub fn alpha_handler(req: Request, ctx: &Context) -> Response {
+    let parsed = validate_input(req.body(), ctx.schema(), MAX_BYTES).expect("validated");
+    let token = ctx.auth().issue_token(parsed.user_id(), Scope::ReadWrite, EXPIRY_SECS);
+    let record = Record::new(parsed.id(), parsed.payload(), token.claims(), now_ms());
+    audit_log(ctx.logger(), "create", record.id(), record.actor(), record.checksum());
+    let stored = ctx.store().insert(record.clone(), WriteMode::Durable).map_err(wrap_err)?;
+    notify_subscribers(ctx.bus(), Topic::Created, stored.id(), stored.version());
+    metrics_incr(ctx.metrics(), "records_created_total", 1, &[("kind", "create")]);
+    Response::created(stored.id(), stored.version(), etag_for(stored.checksum()))
+}
+"#;
 
     #[test]
     fn spans_coalesce_when_they_overlap_or_touch() {
@@ -828,5 +952,429 @@ mod tests {
         // Adjacent spans (18 then 19) are one duplicated run, not two.
         assert_eq!(merge_spans(vec![(19, 20), (10, 18)]), vec![(10, 20)]);
         assert_eq!(merge_spans(vec![]), vec![]);
+    }
+
+    #[test]
+    fn v1_score_shape_is_pinned() {
+        // occurrences * token_total + files * 100 + lines: the arithmetic the
+        // persisted v1 cluster scores were produced with.
+        assert_eq!(v1_score(2, 302, 2, 16), 2 * 302 + 200 + 16);
+        assert_eq!(v1_score(0, 0, 0, 0), 0);
+    }
+
+    #[test]
+    fn a_shared_helper_outranks_plumbing_repeated_far_more_often() {
+        // The regression: `occurrences * token_total` squares the occurrence
+        // count, so 30 copies of a short standard-library window buried a
+        // two-repo helper carrying five times the tokens per copy.
+        let plumbing = score(30, 1, 40, PLUMBING);
+        let helper = score(3, 3, 200, DOMAIN);
+        assert!(
+            helper > plumbing,
+            "helper {helper} must outrank plumbing {plumbing}"
+        );
+        assert!(v1_score(30, 30 * 40, 30, 240) > v1_score(3, 3 * 200, 3, 24));
+    }
+
+    #[test]
+    fn domain_anchors_lift_a_window_above_language_plumbing() {
+        let plumbing = score(4, 2, 100, PLUMBING);
+        let domain = score(4, 2, 100, DOMAIN);
+        assert!(domain > plumbing, "{domain} must beat {plumbing}");
+        // Plumbing keeps exactly a quarter; three or more domain anchors pay
+        // full score, so the weight never inflates past the base.
+        assert_eq!(plumbing, domain * NO_ANCHOR_PCT / 100);
+        assert_eq!(
+            score(4, 2, 100, "call:issue_token call:audit_log member:checksum"),
+            domain
+        );
+    }
+
+    #[test]
+    fn cross_repo_spread_outranks_the_same_mass_in_one_repo() {
+        let one_repo = score(4, 1, 100, DOMAIN);
+        let four_repos = score(4, 4, 100, DOMAIN);
+        assert!(four_repos > one_repo);
+        // 25% per extra repo, and the bonus stops after eight extra repos.
+        assert_eq!(four_repos, one_repo * 175 / 100);
+        assert_eq!(score(4, 20, 100, DOMAIN), score(4, 9, 100, DOMAIN));
+    }
+
+    #[test]
+    fn a_single_occurrence_removes_no_duplication() {
+        // Nothing to extract, so nothing to rank: a lone window scores zero.
+        let solo = cluster_score(&ClusterScoreInput {
+            occurrence_count: 1,
+            repo_count: 1,
+            token_total: 200,
+            preview: DOMAIN,
+        });
+        assert_eq!(solo, 0);
+    }
+
+    #[test]
+    fn scoring_saturates_instead_of_overflowing() {
+        let huge = cluster_score(&ClusterScoreInput {
+            occurrence_count: usize::MAX,
+            repo_count: usize::MAX,
+            token_total: usize::MAX,
+            preview: DOMAIN,
+        });
+        assert!(huge > 0);
+    }
+
+    #[test]
+    fn distinct_domain_anchors_ignores_plumbing_and_repeats() {
+        assert_eq!(distinct_domain_anchors(PLUMBING), 0);
+        assert_eq!(distinct_domain_anchors("call:retry call:retry id kw:if"), 1);
+        assert_eq!(distinct_domain_anchors(""), 0);
+    }
+
+    #[test]
+    fn occurrence_lists_grow_from_one_to_many() {
+        let occ = |norm_start| ScanOccurrence {
+            repo_idx: 0,
+            file_idx: 0,
+            norm_start,
+            start_line: norm_start + 1,
+            end_line: norm_start + 8,
+            token_count: 40,
+        };
+        let mut list = OccList::One(occ(0));
+        assert_eq!(list.len(), 1);
+        list.push(occ(1));
+        list.extend_from(OccList::One(occ(2)));
+        list.extend_from(OccList::Many(vec![occ(3), occ(4)]));
+        assert_eq!(list.len(), 5);
+        let starts: Vec<u32> = list.into_vec().iter().map(|o| o.norm_start).collect();
+        assert_eq!(starts, vec![0, 1, 2, 3, 4], "scan order is preserved");
+    }
+
+    #[test]
+    fn rebasing_shifts_every_file_index_by_the_shard_offset() {
+        let occ = ScanOccurrence {
+            repo_idx: 1,
+            file_idx: 2,
+            norm_start: 0,
+            start_line: 1,
+            end_line: 8,
+            token_count: 40,
+        };
+        let mut one = OccList::One(occ);
+        rebase_file_indexes(&mut one, 10);
+        assert_eq!(one.into_vec()[0].file_idx, 12);
+        let mut many = OccList::Many(vec![occ, occ]);
+        rebase_file_indexes(&mut many, 5);
+        assert!(many.into_vec().iter().all(|o| o.file_idx == 7));
+    }
+
+    #[test]
+    fn window_keys_depend_on_line_content_and_line_boundaries() {
+        let a = normalized_lines("let alpha = beta(gamma);\nlet delta = epsilon(zeta);\n");
+        let same = normalized_lines("let alpha = beta(gamma);\nlet delta = epsilon(zeta);\n");
+        let swapped = normalized_lines("let delta = epsilon(zeta);\nlet alpha = beta(gamma);\n");
+        assert_eq!(window_key(&a), window_key(&same));
+        assert_ne!(window_key(&a), window_key(&swapped));
+        // Blank and comment lines never reach the hash, so an interleaved
+        // comment cannot change a window's identity.
+        let interleaved =
+            normalized_lines("let alpha = beta(gamma);\n\n// note\nlet delta = epsilon(zeta);\n");
+        assert_eq!(window_key(&a), window_key(&interleaved));
+    }
+
+    #[test]
+    fn the_index_key_recovers_the_fingerprints_leading_hex() {
+        let lines = normalized_lines(HANDLER);
+        let key = window_key(&lines);
+        let preview: Vec<&str> = lines.iter().map(|line| line.joined.as_str()).collect();
+        let fingerprint = blake3::hash(preview.join("\n").as_bytes())
+            .to_hex()
+            .to_string();
+        assert_eq!(key_hex_prefix(key), fingerprint[..16]);
+    }
+
+    #[test]
+    fn window_filters_drop_thin_boilerplate_and_import_blocks() {
+        let options = ToolBuildScanOptions::system_default();
+        let window_lines = 4;
+        let indexed = |source: &str, options: &ToolBuildScanOptions| {
+            let normalized = normalized_lines(source);
+            let mut index = HashMap::new();
+            scan_windows(
+                &normalized,
+                0,
+                0,
+                false,
+                false,
+                window_lines,
+                options,
+                &mut index,
+            );
+            index.len()
+        };
+
+        // Braces and one-token lines never clear the token floor.
+        assert_eq!(indexed("{\n}\n{\n}\n{\n}\n", &options), 0);
+
+        let imports = "use alpha::beta::gamma;\nuse delta::epsilon::zeta;\nuse eta::theta::iota;\nuse kappa::lambda::mu;\n";
+        assert_eq!(indexed(imports, &options), 0, "import blocks are not tools");
+
+        // A dense domain body clears every floor.
+        assert!(indexed(HANDLER, &options) > 0);
+
+        // Waiving the anchor floor is what keeps the shell/config lanes alive:
+        // the same body still indexes when structure is required, and a
+        // plumbing-only body only indexes once structure is waived.
+        let plumbing = "let a = values.iter().copied().collect::<Vec<_>>();\nlet b = names.iter().map(|n| n.to_string()).collect::<Vec<_>>();\nlet c = b.join(\", \").trim().to_owned();\nlet d = c.parse::<usize>().unwrap_or_default();\n";
+        assert_eq!(indexed(plumbing, &options), 0);
+        let waived = {
+            let normalized = normalized_lines(plumbing);
+            let mut index = HashMap::new();
+            scan_windows(
+                &normalized,
+                0,
+                0,
+                false,
+                true,
+                window_lines,
+                &options,
+                &mut index,
+            );
+            index.len()
+        };
+        assert!(
+            waived > 0,
+            "shell/config lanes rely on the token floor alone"
+        );
+    }
+
+    #[test]
+    fn config_windows_face_a_higher_token_floor() {
+        let mut options = ToolBuildScanOptions::system_default();
+        let source = "alpha = 1\nbeta = 2\ngamma = 3\ndelta = 4\n";
+        let normalized = normalized_lines(source);
+        // Sit the plain floor exactly on the window: the config floor adds
+        // half again on top, so only the config lane rejects it.
+        options.base.min_normalized_tokens = normalized.iter().map(|line| line.token_count).sum();
+        let count = |is_config: bool| {
+            let mut index = HashMap::new();
+            scan_windows(&normalized, 0, 0, is_config, true, 4, &options, &mut index);
+            index.len()
+        };
+        assert!(count(false) > 0, "the plain floor admits this window");
+        assert_eq!(count(true), 0, "config repetition needs a higher bar");
+    }
+
+    #[test]
+    fn coverage_is_one_entry_per_file_with_coalesced_spans() {
+        let roots = vec![
+            ("repo-a".to_string(), PathBuf::from("/a")),
+            ("repo-b".to_string(), PathBuf::from("/b")),
+        ];
+        let file = |rel: &str| FileEntry {
+            abs: PathBuf::from(rel),
+            rel: rel.to_string(),
+            language: "rust".to_string(),
+            class: PathClass::Source,
+        };
+        let file_table = vec![file("src/one.rs"), file("src/two.rs")];
+        let occ = |repo_idx, file_idx, start_line, end_line| ScanOccurrence {
+            repo_idx,
+            file_idx,
+            norm_start: 0,
+            start_line,
+            end_line,
+            token_count: 40,
+        };
+        let coverage = file_coverage(
+            &[
+                occ(0, 0, 10, 17),
+                occ(0, 0, 14, 21),
+                occ(0, 0, 40, 47),
+                occ(1, 1, 5, 12),
+            ],
+            &roots,
+            &file_table,
+        );
+        assert_eq!(coverage.len(), 2);
+        assert_eq!(coverage[0].repo_id, "repo-a");
+        assert_eq!(coverage[0].path, "src/one.rs");
+        assert_eq!(coverage[0].spans, vec![(10, 21), (40, 47)]);
+        assert_eq!(coverage[1].repo_id, "repo-b");
+        assert_eq!(coverage[1].spans, vec![(5, 12)]);
+    }
+
+    #[test]
+    fn reconstruction_drops_a_window_whose_file_changed_mid_scan() {
+        let root = tmp_dir("reconstruct");
+        write(&root, "src/lib.rs", HANDLER);
+        let abs = root.join("src/lib.rs");
+        let normalized = normalized_lines(HANDLER);
+        let window_lines = 4;
+        let key = window_key(&normalized[..window_lines]);
+        let file_table = vec![FileEntry {
+            abs: abs.clone(),
+            rel: "src/lib.rs".to_string(),
+            language: "rust".to_string(),
+            class: PathClass::Source,
+        }];
+        let proto = ProtoCluster {
+            key,
+            occs: vec![ScanOccurrence {
+                repo_idx: 0,
+                file_idx: 0,
+                norm_start: 0,
+                start_line: 1,
+                end_line: 4,
+                token_count: 40,
+            }],
+            norm_len: window_lines,
+            member_keys: Vec::new(),
+        };
+        let recon = reconstruct_previews(std::slice::from_ref(&proto), &file_table, window_lines);
+        let recovered = recon[0].as_ref().expect("window still on disk");
+        assert_eq!(recovered.fingerprint_hex[..16], key_hex_prefix(key));
+        assert!(recovered.token_count > 0);
+        assert_eq!(recovered.preview.lines().count(), window_lines);
+
+        // Rewrite the file: the head window no longer hashes to the key.
+        std::fs::write(&abs, HANDLER.replace("alpha_handler", "gamma_handler")).expect("rewrite");
+        let stale = reconstruct_previews(&[proto], &file_table, window_lines);
+        assert!(stale[0].is_none(), "a changed file yields no preview");
+
+        // A vanished file is dropped the same way, never a panic.
+        std::fs::remove_file(&abs).expect("remove");
+        let gone = reconstruct_previews(
+            &[ProtoCluster {
+                key,
+                occs: vec![ScanOccurrence {
+                    repo_idx: 0,
+                    file_idx: 0,
+                    norm_start: 0,
+                    start_line: 1,
+                    end_line: 4,
+                    token_count: 40,
+                }],
+                norm_len: window_lines,
+                member_keys: Vec::new(),
+            }],
+            &file_table,
+            window_lines,
+        );
+        assert!(gone[0].is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scanning_two_repos_yields_one_cross_repo_cluster() {
+        let root = tmp_dir("scan-roots");
+        let repo_a = root.join("repo-a");
+        let repo_b = root.join("repo-b");
+        write(&repo_a, "src/lib.rs", HANDLER);
+        write(&repo_b, "src/service.rs", HANDLER);
+        // Repeated only inside repo-a: it must not survive min_repo_count = 2.
+        write(&repo_a, "src/copy.rs", HANDLER);
+
+        let roots = vec![
+            ("repo-a".to_string(), repo_a.clone()),
+            ("repo-b".to_string(), repo_b.clone()),
+        ];
+        let mut options = ToolBuildScanOptions::system_default();
+        options.threads = 1;
+        options.use_git_ls_files = false;
+        options.base.window_lines = 8;
+
+        let phases = Mutex::new(Vec::new());
+        let report = scan_roots(
+            &roots,
+            "system/host",
+            "working-tree",
+            &options,
+            &|progress| {
+                phases.lock().expect("phases").push(progress.phase);
+            },
+        )
+        .expect("scan");
+
+        assert_eq!(report.repo_id, "system/host");
+        assert_eq!(report.commit_sha, "working-tree");
+        assert_eq!(report.scanned_files, 3);
+        assert!(!report.clusters.is_empty());
+        for cluster in &report.clusters {
+            assert_eq!(cluster.repo_count, 2, "min_repo_count = 2 is enforced");
+            assert!(cluster.occurrence_count >= 3);
+            assert_eq!(cluster.language, "rust");
+            assert_eq!(cluster.category, ToolBuildCategory::ToolCandidate);
+        }
+        // Ranked by score, highest first.
+        let scores: Vec<u64> = report.clusters.iter().map(|c| c.score).collect();
+        let mut sorted = scores.clone();
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+        assert_eq!(scores, sorted);
+
+        let phases = phases.into_inner().expect("phases");
+        assert_eq!(phases.first(), Some(&ToolBuildScanPhase::Discover));
+        assert_eq!(phases.last(), Some(&ToolBuildScanPhase::Finalize));
+
+        // Thread count never changes the output.
+        options.threads = 4;
+        let parallel =
+            scan_roots(&roots, "system/host", "working-tree", &options, &|_| {}).expect("scan");
+        let ids = |report: &ToolBuildScanReport| -> Vec<String> {
+            report
+                .clusters
+                .iter()
+                .map(|cluster| cluster.cluster_id.clone())
+                .collect()
+        };
+        assert_eq!(ids(&report), ids(&parallel));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_v1_path_surfaces_the_first_io_error_in_repo_order() {
+        let root = tmp_dir("scan-v1-missing");
+        let present = root.join("present");
+        write(&present, "src/lib.rs", HANDLER);
+        let roots = vec![
+            ("present".to_string(), present.clone()),
+            ("missing".to_string(), root.join("missing")),
+        ];
+        let options = ToolBuildScanOptions::v1_compat(ToolBuildScanConfig::default());
+        let error = scan_roots(&roots, "parity", "c1", &options, &|_| {})
+            .expect_err("a missing root is an error on the v1 path");
+        assert!(matches!(error, CodeGraphError::Index { .. }), "{error:?}");
+
+        // The v2 path counts the same root as skipped and keeps going.
+        let mut tolerant = ToolBuildScanOptions::system_default();
+        tolerant.threads = 1;
+        tolerant.use_git_ls_files = false;
+        let report = scan_roots(&roots, "system/host", "working-tree", &tolerant, &|_| {})
+            .expect("v2 tolerates an unreadable root");
+        assert_eq!(report.scanned_files, 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn oversized_files_are_counted_as_skipped_not_scanned() {
+        let root = tmp_dir("scan-oversize");
+        let repo = root.join("repo-a");
+        write(&repo, "src/lib.rs", HANDLER);
+        let mut options = ToolBuildScanOptions::system_default();
+        options.threads = 1;
+        options.use_git_ls_files = false;
+        options.base.max_file_bytes = 8;
+        let report = scan_roots(
+            &[("repo-a".to_string(), repo)],
+            "system/host",
+            "working-tree",
+            &options,
+            &|_| {},
+        )
+        .expect("scan");
+        assert_eq!(report.scanned_files, 0);
+        assert_eq!(report.skipped_files, 1);
+        assert!(report.clusters.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
