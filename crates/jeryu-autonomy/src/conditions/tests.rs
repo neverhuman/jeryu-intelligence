@@ -176,7 +176,11 @@ fn cases() -> Vec<Case> {
     vec![
         fire(
             "secret_scan_failed",
-            pack_with_security(ScanOutcome::Passed, ScanOutcome::Passed, ScanOutcome::Failed),
+            pack_with_security(
+                ScanOutcome::Passed,
+                ScanOutcome::Passed,
+                ScanOutcome::Failed,
+            ),
             "a failed secret scan is a hard stop",
         ),
         Case {
