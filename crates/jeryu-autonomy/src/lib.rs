@@ -45,8 +45,10 @@ pub mod sha_bind;
 pub mod types;
 pub mod verdict_store;
 
-#[cfg(test)]
-mod test_support;
+/// Test data builders, shared by the in-crate suites and — under the
+/// `test-support` feature — by the integration tests in `tests/`.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 // --- Curated re-exports (the public Evidence-Gate surface) -----------------
 

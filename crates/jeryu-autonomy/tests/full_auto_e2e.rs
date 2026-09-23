@@ -19,120 +19,24 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use jeryu_autonomy::test_support::{PackBuilder, bundle_requiring, full_passing_receipts};
 use jeryu_autonomy::{
-    AgentApprovalReceipt, CiCheck, CiConclusion, ConditionRegistry, EdSigningKey, EvidenceInputs,
-    EvidencePack, FullAutoProfile, GateDecision, JudgeInputs, KillBell, MemoryLedger, PolicyBundle,
-    ReviewDecision, ReviewerRole, RiskTier, RollbackSection, RollbackStrategy, ScanOutcome,
-    SchemaTag, SecuritySection, Signature, SupplyChainSection, TestsSection, TokenCounts,
-    VerdictLedger, build_evidence_pack, judge, policy_yaml,
+    CiConclusion, ConditionRegistry, EdSigningKey, EvidencePack, FullAutoProfile, GateDecision,
+    JudgeInputs, KillBell, MemoryLedger, RiskTier, VerdictLedger, judge,
 };
-
-/// Canonical default policy bundle (declares the R5 fail-closed floor).
-fn bundle() -> PolicyBundle {
-    policy_yaml::fixtures::default_bundle()
-}
-
-/// The same bundle with `approvals.required_ci_lanes` set so the pre-merge CI
-/// gate is armed.
-fn bundle_requiring(lanes: &[&str]) -> PolicyBundle {
-    let mut b = bundle();
-    b.approvals.required_ci_lanes = lanes.iter().map(|s| s.to_string()).collect();
-    b
-}
-
-/// Four distinct reviewer roles passing — enough to clear the agent-reviewer
-/// quorum at any tier full-auto makes eligible (R3 needs 4). None is the author.
-fn full_passing_receipts(pack: &EvidencePack) -> Vec<AgentApprovalReceipt> {
-    [
-        (ReviewerRole::Security, "sec.v1"),
-        (ReviewerRole::TestIntegrity, "test.v1"),
-        (ReviewerRole::Runtime, "rt.v1"),
-        (ReviewerRole::Lockfile, "lock.v1"),
-    ]
-    .into_iter()
-    .map(|(role, agent)| receipt(role, agent, pack))
-    .collect()
-}
-
-fn receipt(role: ReviewerRole, agent: &str, pack: &EvidencePack) -> AgentApprovalReceipt {
-    AgentApprovalReceipt {
-        schema: SchemaTag::new(),
-        id: format!("aar_{agent}"),
-        evidence_pack_id: pack.id.clone(),
-        role,
-        agent_id: agent.into(),
-        prompt_sha: None,
-        provider: None,
-        model: None,
-        temperature: None,
-        seed: None,
-        raw_response_sha: Some("sha256:beef".into()),
-        head_sha: pack.head_sha.clone(),
-        policy_sha: pack.policy_sha.clone(),
-        decision: ReviewDecision::Pass,
-        reason: None,
-        findings: vec![],
-        not_author: true,
-        tokens: TokenCounts::default(),
-        created_at: Utc::now(),
-        signature: Signature::unsigned(),
-    }
-}
 
 /// A signed, SHA-bound pack at `tier` with clean (or, if `secret_failed`,
 /// secret-scan-failing) security evidence and the supplied CI status.
 fn pack_at_tier(tier: RiskTier, secret_failed: bool, ci: &[(&str, CiConclusion)]) -> EvidencePack {
-    let (h, b, c) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
-    let mut p = build_evidence_pack(EvidenceInputs {
-        repo: "org/p",
-        source_branch: "jeryu-pr-7",
-        target_branch: "main",
-        head_sha: &h,
-        base_sha: &b,
-        policy_sha: &c,
-        author_agent: Some("builder.x"),
-        intent_id: None,
-        risk: tier,
-        changed_files: vec![],
-        claims: vec![],
-        tests: TestsSection {
-            targeted: vec![],
-            full_required: false,
-            skipped: vec![],
-            coverage_delta: None,
-        },
-        security: SecuritySection {
-            sast: ScanOutcome::Passed,
-            dependency_scan: ScanOutcome::Passed,
-            secret_scan: if secret_failed {
-                ScanOutcome::Failed
-            } else {
-                ScanOutcome::Passed
-            },
-        },
-        supply_chain: SupplyChainSection::default(),
-        rollback: RollbackSection {
-            strategy: RollbackStrategy::RevertCommit,
-            feature_flag: None,
-            data_migration_reversible: Some(true),
-        },
-        gate_receipts: vec![],
-        ci_status: ci
-            .iter()
-            .map(|(name, conclusion)| CiCheck {
-                name: (*name).to_string(),
-                conclusion: *conclusion,
-            })
-            .collect(),
-    });
     // A full-auto pack is signed by the evidence builder; the unsigned case is
     // covered elsewhere (it trips `evidence_signature_invalid`).
-    p.signature = Some(Signature {
-        key_id: "evidence-builder.v1".into(),
-        algo: "ed25519".into(),
-        value: "0".repeat(128),
-    });
-    p
+    PackBuilder::new()
+        .source_branch("jeryu-pr-7")
+        .risk(tier)
+        .secret_scan_failed(secret_failed)
+        .ci(ci)
+        .signed(true)
+        .build()
 }
 
 /// The full dogfood decision: derive the full-auto bundle, fuse the pack through

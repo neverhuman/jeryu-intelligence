@@ -1,78 +1,23 @@
 use super::*;
-use crate::evidence::{EvidenceInputs, build_evidence_pack};
 use crate::ledger::MemoryLedger;
 use crate::policy_yaml::fixtures;
 use crate::seam::LedgerFilter;
+use crate::test_support::{self, PackBuilder};
 use crate::types::*;
 use crate::verdict_store::MemoryVerdictStore;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 
 fn signed_pack(repo: &str) -> EvidencePack {
-    let (h, b, c) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
-    let mut p = build_evidence_pack(EvidenceInputs {
-        repo,
-        source_branch: "jeryu-pr-1",
-        target_branch: "main",
-        head_sha: &h,
-        base_sha: &b,
-        policy_sha: &c,
-        author_agent: Some("builder.x"),
-        intent_id: None,
-        risk: RiskTier::R2,
-        changed_files: vec![],
-        claims: vec![],
-        tests: TestsSection {
-            targeted: vec![],
-            full_required: false,
-            skipped: vec![],
-            coverage_delta: None,
-        },
-        security: SecuritySection {
-            sast: ScanOutcome::Passed,
-            dependency_scan: ScanOutcome::Passed,
-            secret_scan: ScanOutcome::Passed,
-        },
-        supply_chain: SupplyChainSection::default(),
-        rollback: RollbackSection {
-            strategy: RollbackStrategy::RevertCommit,
-            feature_flag: None,
-            data_migration_reversible: Some(true),
-        },
-        gate_receipts: vec![],
-        ci_status: vec![],
-    });
-    p.signature = Some(Signature {
-        key_id: "evidence-builder.v1".into(),
-        algo: "ed25519".into(),
-        value: "0".repeat(128),
-    });
-    p
+    PackBuilder::new()
+        .repo(repo)
+        .source_branch("jeryu-pr-1")
+        .signed(true)
+        .build()
 }
 
 fn receipt(role: ReviewerRole, agent: &str, pack: &EvidencePack) -> AgentApprovalReceipt {
-    AgentApprovalReceipt {
-        schema: SchemaTag::new(),
-        id: format!("aar_{agent}"),
-        evidence_pack_id: pack.id.clone(),
-        role,
-        agent_id: agent.into(),
-        prompt_sha: None,
-        provider: None,
-        model: None,
-        temperature: None,
-        seed: None,
-        raw_response_sha: Some("sha256:beef".into()),
-        head_sha: pack.head_sha.clone(),
-        policy_sha: pack.policy_sha.clone(),
-        decision: ReviewDecision::Pass,
-        reason: None,
-        findings: vec![],
-        not_author: true,
-        tokens: TokenCounts::default(),
-        created_at: Utc::now(),
-        signature: Signature::unsigned(),
-    }
+    test_support::receipt(role, agent).bound_to(pack).build()
 }
 
 /// A controllable evidence source.

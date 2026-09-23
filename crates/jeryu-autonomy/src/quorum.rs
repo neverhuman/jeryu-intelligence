@@ -160,33 +160,13 @@ mod tests {
     use super::*;
     use crate::policy_yaml::{ApprovalRules, QuorumEntry};
     use crate::types::*;
-    use chrono::Utc;
-    use jeryu_signing::Signature;
     use std::collections::HashMap;
 
     fn receipt(role: ReviewerRole, agent: &str, decision: ReviewDecision) -> AgentApprovalReceipt {
-        AgentApprovalReceipt {
-            schema: SchemaTag::new(),
-            id: format!("aar_{agent}"),
-            evidence_pack_id: "evp_x".into(),
-            role,
-            agent_id: agent.into(),
-            prompt_sha: None,
-            provider: None,
-            model: None,
-            temperature: None,
-            seed: None,
-            raw_response_sha: None,
-            head_sha: "a".repeat(40),
-            policy_sha: "c".repeat(40),
-            decision,
-            reason: None,
-            findings: vec![],
-            not_author: true,
-            tokens: TokenCounts::default(),
-            created_at: Utc::now(),
-            signature: Signature::unsigned(),
-        }
+        crate::test_support::receipt(role, agent)
+            .decision(decision)
+            .raw_response_sha(None)
+            .build()
     }
 
     fn policy_with_quorum(

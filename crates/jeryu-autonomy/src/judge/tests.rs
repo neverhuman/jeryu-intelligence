@@ -1,49 +1,26 @@
 use super::*;
 use crate::conditions::HardStop;
 use crate::types::*;
-use chrono::Utc;
-use jeryu_signing::Signature;
 
-use crate::test_support::{bundle, pack_at_tier};
+use crate::test_support::{bundle, pack};
 
 fn receipt(
     role: ReviewerRole,
     agent: &str,
     decision: ReviewDecision,
-    pack: &EvidencePack,
+    p: &EvidencePack,
 ) -> AgentApprovalReceipt {
-    AgentApprovalReceipt {
-        schema: SchemaTag::new(),
-        id: format!("aar_{agent}"),
-        evidence_pack_id: pack.id.clone(),
-        role,
-        agent_id: agent.into(),
-        prompt_sha: None,
-        provider: None,
-        model: None,
-        temperature: None,
-        seed: None,
-        raw_response_sha: Some("sha256:beef".into()),
-        head_sha: pack.head_sha.clone(),
-        policy_sha: pack.policy_sha.clone(),
-        decision,
-        reason: None,
-        findings: vec![],
-        not_author: true,
-        tokens: TokenCounts::default(),
-        created_at: Utc::now(),
-        signature: Signature {
-            key_id: format!("{agent}.ed25519"),
-            algo: "hmac-sha256-insecure".into(),
-            value: "0".repeat(64),
-        },
-    }
+    crate::test_support::receipt(role, agent)
+        .bound_to(p)
+        .decision(decision)
+        .signed_by_agent()
+        .build()
 }
 
 #[test]
 fn allow_merge_when_quorum_met_no_hard_stops() {
     let b = bundle();
-    let p = pack_at_tier(RiskTier::R2, true, false);
+    let p = pack().signed(true).build();
     let receipts = vec![
         receipt(ReviewerRole::Security, "sec.v1", ReviewDecision::Pass, &p),
         receipt(
@@ -71,7 +48,7 @@ fn allow_merge_when_quorum_met_no_hard_stops() {
 #[test]
 fn one_blocking_reviewer_rejects_via_hard_stop() {
     let b = bundle();
-    let p = pack_at_tier(RiskTier::R2, true, false);
+    let p = pack().signed(true).build();
     let receipts = vec![
         receipt(ReviewerRole::Security, "sec.v1", ReviewDecision::Block, &p),
         receipt(
@@ -103,7 +80,7 @@ fn one_blocking_reviewer_rejects_via_hard_stop() {
 #[test]
 fn secret_scan_failure_rejects_even_with_unanimous_approval() {
     let b = bundle();
-    let p = pack_at_tier(RiskTier::R2, true, true);
+    let p = pack().signed(true).secret_scan_failed(true).build();
     let receipts = vec![
         receipt(ReviewerRole::Security, "sec.v1", ReviewDecision::Pass, &p),
         receipt(
@@ -135,7 +112,7 @@ fn secret_scan_failure_rejects_even_with_unanimous_approval() {
 #[test]
 fn sha_drift_drops_receipt() {
     let b = bundle();
-    let p = pack_at_tier(RiskTier::R2, true, false);
+    let p = pack().signed(true).build();
     let mut bad = receipt(ReviewerRole::Security, "sec.v1", ReviewDecision::Pass, &p);
     bad.head_sha = "d".repeat(40);
     let good = receipt(
@@ -163,7 +140,7 @@ fn sha_drift_drops_receipt() {
 #[test]
 fn unsigned_pack_fails_closed_via_evidence_signature_invalid() {
     let b = bundle();
-    let p = pack_at_tier(RiskTier::R2, false, false);
+    let p = pack().build();
     let receipts = vec![
         receipt(ReviewerRole::Security, "sec.v1", ReviewDecision::Pass, &p),
         receipt(
@@ -195,7 +172,7 @@ fn unsigned_pack_fails_closed_via_evidence_signature_invalid() {
 #[test]
 fn injected_codeowners_not_satisfied_forces_reject() {
     let b = bundle();
-    let p = pack_at_tier(RiskTier::R2, true, false);
+    let p = pack().signed(true).build();
     let receipts = vec![
         receipt(ReviewerRole::Security, "sec.v1", ReviewDecision::Pass, &p),
         receipt(
@@ -232,7 +209,7 @@ fn injected_codeowners_not_satisfied_forces_reject() {
 #[test]
 fn r4_protected_path_requires_human_even_with_all_passes() {
     let b = bundle();
-    let p = pack_at_tier(RiskTier::R4, true, false);
+    let p = pack().risk(RiskTier::R4).signed(true).build();
     let out = judge(JudgeInputs {
         pack: &p,
         receipts: &[],

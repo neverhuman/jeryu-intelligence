@@ -50,70 +50,20 @@ pub fn verify_sha_binding(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::evidence::{EvidenceInputs, build_evidence_pack};
     use crate::types::*;
-    use chrono::Utc;
-    use jeryu_signing::Signature;
 
     fn pack() -> EvidencePack {
-        let (h, b, c) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
-        build_evidence_pack(EvidenceInputs {
-            repo: "org/p",
-            source_branch: "agent/x",
-            target_branch: "main",
-            head_sha: &h,
-            base_sha: &b,
-            policy_sha: &c,
-            author_agent: Some("builder"),
-            intent_id: None,
-            risk: RiskTier::R2,
-            changed_files: vec![],
-            claims: vec![],
-            tests: TestsSection {
-                targeted: vec![],
-                full_required: false,
-                skipped: vec![],
-                coverage_delta: None,
-            },
-            security: SecuritySection {
-                sast: ScanOutcome::Passed,
-                dependency_scan: ScanOutcome::Passed,
-                secret_scan: ScanOutcome::Passed,
-            },
-            supply_chain: SupplyChainSection::default(),
-            rollback: RollbackSection {
-                strategy: RollbackStrategy::RevertCommit,
-                feature_flag: None,
-                data_migration_reversible: Some(true),
-            },
-            gate_receipts: vec![],
-            ci_status: vec![],
-        })
+        crate::test_support::PackBuilder::new()
+            .author_agent(Some("builder"))
+            .build()
     }
 
     fn receipt_for(p: &EvidencePack) -> AgentApprovalReceipt {
-        AgentApprovalReceipt {
-            schema: SchemaTag::new(),
-            id: "aar_x".into(),
-            evidence_pack_id: p.id.clone(),
-            role: ReviewerRole::Security,
-            agent_id: "sec.v1".into(),
-            prompt_sha: None,
-            provider: None,
-            model: None,
-            temperature: None,
-            seed: None,
-            raw_response_sha: None,
-            head_sha: p.head_sha.clone(),
-            policy_sha: p.policy_sha.clone(),
-            decision: ReviewDecision::Pass,
-            reason: None,
-            findings: vec![],
-            not_author: true,
-            tokens: TokenCounts::default(),
-            created_at: Utc::now(),
-            signature: Signature::unsigned(),
-        }
+        crate::test_support::receipt(ReviewerRole::Security, "sec.v1")
+            .id("aar_x")
+            .bound_to(p)
+            .raw_response_sha(None)
+            .build()
     }
 
     #[test]

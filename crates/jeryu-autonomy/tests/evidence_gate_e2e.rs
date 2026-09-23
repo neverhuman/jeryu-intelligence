@@ -7,19 +7,14 @@
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
+use jeryu_autonomy::test_support::{self, PackBuilder, bundle};
 use jeryu_autonomy::{
     AgentApprovalReceipt, Clock, ConditionRegistry, EdSigningKey, EscalationConfig,
-    EscalationEvent, EscalationKind, EscalationSink, EvidenceInputs, FixedClock, GateDecision,
-    JudgeInputs, KillBell, LedgerFilter, MemoryLedger, MemoryVerdictStore, PolicyBundle,
-    ReviewDecision, ReviewerRole, RiskTier, RollbackSection, RollbackStrategy, ScanOutcome,
-    SchemaTag, SecuritySection, Signature, SupplyChainSection, TestsSection, VerdictLedger,
-    VerdictStore, WebhookConfig, build_evidence_pack, build_payload, dispatch_all, judge,
-    policy_yaml, replay_subject, sign_entry, verdict_issued_entry, verify_sha_binding,
+    EscalationEvent, EscalationKind, EscalationSink, FixedClock, GateDecision, JudgeInputs,
+    KillBell, LedgerFilter, MemoryLedger, MemoryVerdictStore, ReviewerRole, RiskTier,
+    VerdictLedger, VerdictStore, WebhookConfig, build_payload, dispatch_all, judge, replay_subject,
+    sign_entry, verdict_issued_entry, verify_sha_binding,
 };
-
-fn bundle() -> PolicyBundle {
-    policy_yaml::fixtures::default_bundle()
-}
 
 fn signed_pack(
     repo: &str,
@@ -27,49 +22,14 @@ fn signed_pack(
     policy: &str,
     secret_failed: bool,
 ) -> jeryu_autonomy::EvidencePack {
-    let base = "b".repeat(40);
-    let mut p = build_evidence_pack(EvidenceInputs {
-        repo,
-        source_branch: "jeryu-pr-7",
-        target_branch: "main",
-        head_sha: head,
-        base_sha: &base,
-        policy_sha: policy,
-        author_agent: Some("builder.x"),
-        intent_id: None,
-        risk: RiskTier::R2,
-        changed_files: vec![],
-        claims: vec![],
-        tests: TestsSection {
-            targeted: vec![],
-            full_required: false,
-            skipped: vec![],
-            coverage_delta: None,
-        },
-        security: SecuritySection {
-            sast: ScanOutcome::Passed,
-            dependency_scan: ScanOutcome::Passed,
-            secret_scan: if secret_failed {
-                ScanOutcome::Failed
-            } else {
-                ScanOutcome::Passed
-            },
-        },
-        supply_chain: SupplyChainSection::default(),
-        rollback: RollbackSection {
-            strategy: RollbackStrategy::RevertCommit,
-            feature_flag: None,
-            data_migration_reversible: Some(true),
-        },
-        gate_receipts: vec![],
-        ci_status: vec![],
-    });
-    p.signature = Some(Signature {
-        key_id: "evidence-builder.v1".into(),
-        algo: "ed25519".into(),
-        value: "0".repeat(128),
-    });
-    p
+    PackBuilder::new()
+        .repo(repo)
+        .source_branch("jeryu-pr-7")
+        .head_sha(head)
+        .policy_sha(policy)
+        .secret_scan_failed(secret_failed)
+        .signed(true)
+        .build()
 }
 
 fn receipt(
@@ -77,28 +37,7 @@ fn receipt(
     agent: &str,
     pack: &jeryu_autonomy::EvidencePack,
 ) -> AgentApprovalReceipt {
-    AgentApprovalReceipt {
-        schema: SchemaTag::new(),
-        id: format!("aar_{agent}"),
-        evidence_pack_id: pack.id.clone(),
-        role,
-        agent_id: agent.into(),
-        prompt_sha: None,
-        provider: None,
-        model: None,
-        temperature: None,
-        seed: None,
-        raw_response_sha: Some("sha256:beef".into()),
-        head_sha: pack.head_sha.clone(),
-        policy_sha: pack.policy_sha.clone(),
-        decision: ReviewDecision::Pass,
-        reason: None,
-        findings: vec![],
-        not_author: true,
-        tokens: Default::default(),
-        created_at: Utc::now(),
-        signature: Signature::unsigned(),
-    }
+    test_support::receipt(role, agent).bound_to(pack).build()
 }
 
 #[tokio::test]

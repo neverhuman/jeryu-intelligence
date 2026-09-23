@@ -15,5 +15,10 @@ uuid = { version = "1", features = ["v4"] }
 async-trait = "0.1"
 thiserror = "1"
 
+[features]
+# Exposes `test_support` to the integration tests in `tests/`.
+test-support = []
+
 [dev-dependencies]
+jeryu-autonomy = { path = ".", features = ["test-support"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }

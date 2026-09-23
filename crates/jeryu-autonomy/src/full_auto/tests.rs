@@ -13,55 +13,10 @@ use crate::policy_yaml::{PolicyBundle, fixtures};
 use crate::seam::VerdictLedger;
 use crate::types::*;
 use chrono::Utc;
-use jeryu_signing::{EdSigningKey, Signature};
+use jeryu_signing::EdSigningKey;
 use std::sync::Arc;
 
-use crate::test_support::{bundle, pack_at_tier};
-
-/// All seven reviewer roles passing, so quorum is satisfiable at any tier that
-/// requires agent reviewers (R3 needs 4). Distinct agent identities; none the
-/// author.
-fn full_passing_receipts(pack: &EvidencePack) -> Vec<AgentApprovalReceipt> {
-    [
-        (ReviewerRole::Security, "sec.v1"),
-        (ReviewerRole::TestIntegrity, "test.v1"),
-        (ReviewerRole::Runtime, "rt.v1"),
-        (ReviewerRole::Lockfile, "lock.v1"),
-    ]
-    .into_iter()
-    .map(|(role, agent)| receipt(role, agent, ReviewDecision::Pass, pack))
-    .collect()
-}
-
-fn receipt(
-    role: ReviewerRole,
-    agent: &str,
-    decision: ReviewDecision,
-    pack: &EvidencePack,
-) -> AgentApprovalReceipt {
-    AgentApprovalReceipt {
-        schema: SchemaTag::new(),
-        id: format!("aar_{agent}"),
-        evidence_pack_id: pack.id.clone(),
-        role,
-        agent_id: agent.into(),
-        prompt_sha: None,
-        provider: None,
-        model: None,
-        temperature: None,
-        seed: None,
-        raw_response_sha: Some("sha256:beef".into()),
-        head_sha: pack.head_sha.clone(),
-        policy_sha: pack.policy_sha.clone(),
-        decision,
-        reason: None,
-        findings: vec![],
-        not_author: true,
-        tokens: TokenCounts::default(),
-        created_at: Utc::now(),
-        signature: Signature::unsigned(),
-    }
-}
+use crate::test_support::{PackBuilder, bundle, full_passing_receipts};
 
 fn judge_under(profile: &FullAutoProfile, pack: &EvidencePack) -> GateDecision {
     judge_under_with_stops(profile, pack, &[])
@@ -274,7 +229,7 @@ fn full_auto_allows_merge_r0_through_r4() {
         RiskTier::R3,
         RiskTier::R4,
     ] {
-        let pack = pack_at_tier(t, true, false);
+        let pack = PackBuilder::new().risk(t).signed(true).build();
         assert_eq!(
             judge_under(&p, &pack),
             GateDecision::AllowMerge,
@@ -286,7 +241,7 @@ fn full_auto_allows_merge_r0_through_r4() {
 #[test]
 fn full_auto_requires_human_at_r5() {
     let p = FullAutoProfile::new(bundle()).unwrap();
-    let pack = pack_at_tier(RiskTier::R5, true, false);
+    let pack = PackBuilder::new().risk(RiskTier::R5).signed(true).build();
     assert_eq!(
         judge_under(&p, &pack),
         GateDecision::RequireHuman,
@@ -299,7 +254,7 @@ fn r4_requires_human_without_full_auto_baseline() {
     // Sanity: the *default* bundle (no full-auto) lands RequireHuman at R4, so
     // the AllowMerge above is genuinely the profile's doing.
     let b = bundle();
-    let pack = pack_at_tier(RiskTier::R4, true, false);
+    let pack = PackBuilder::new().risk(RiskTier::R4).signed(true).build();
     let receipts = full_passing_receipts(&pack);
     let out = judge(JudgeInputs {
         pack: &pack,
@@ -328,7 +283,11 @@ fn hard_stop_rejects_at_every_tier_even_full_auto() {
         RiskTier::R5,
     ] {
         // secret_scan_failed fires the registry hard stop.
-        let pack = pack_at_tier(t, true, true);
+        let pack = PackBuilder::new()
+            .risk(t)
+            .signed(true)
+            .secret_scan_failed(true)
+            .build();
         assert_eq!(
             judge_under(&p, &pack),
             GateDecision::Reject,
@@ -340,7 +299,7 @@ fn hard_stop_rejects_at_every_tier_even_full_auto() {
 #[test]
 fn injected_external_hard_stop_rejects_under_full_auto() {
     let p = FullAutoProfile::new(bundle()).unwrap();
-    let pack = pack_at_tier(RiskTier::R1, true, false);
+    let pack = PackBuilder::new().risk(RiskTier::R1).signed(true).build();
     let injected = [HardStop {
         name: "codeowners_not_satisfied".into(),
         reason: "no codeowner approval".into(),
@@ -392,7 +351,7 @@ fn resolve_downgrades_allow_merge_at_r5() {
 #[tokio::test]
 async fn kill_bell_downgrades_full_auto_allow_merge_to_require_human() {
     let p = FullAutoProfile::new(bundle()).unwrap();
-    let pack = pack_at_tier(RiskTier::R4, true, false);
+    let pack = PackBuilder::new().risk(RiskTier::R4).signed(true).build();
     // Pre-bell, full-auto AllowMerges at R4.
     assert_eq!(judge_under(&p, &pack), GateDecision::AllowMerge);
 
@@ -477,7 +436,7 @@ fn unsigned_pack_still_rejects_under_full_auto() {
     // evidence_signature_invalid is a registry hard stop; full-auto must not
     // bypass it.
     let p = FullAutoProfile::new(bundle()).unwrap();
-    let pack = pack_at_tier(RiskTier::R2, false, false);
+    let pack = PackBuilder::new().build();
     assert_eq!(judge_under(&p, &pack), GateDecision::Reject);
 }
 
@@ -537,7 +496,7 @@ fn ci_gate_all_required_lanes_green_allows_merge_r0_through_r4() {
         RiskTier::R4,
     ] {
         let pack = with_ci(
-            pack_at_tier(t, true, false),
+            PackBuilder::new().risk(t).signed(true).build(),
             &[
                 ("ci-fast", CiConclusion::Success),
                 ("ci-full", CiConclusion::Success),
@@ -562,7 +521,7 @@ fn ci_gate_failed_required_lane_blocks_via_hard_stop() {
         RiskTier::R4,
     ] {
         let pack = with_ci(
-            pack_at_tier(t, true, false),
+            PackBuilder::new().risk(t).signed(true).build(),
             &[
                 ("ci-fast", CiConclusion::Success),
                 ("ci-full", CiConclusion::Failure),
@@ -588,7 +547,7 @@ fn ci_gate_missing_required_lane_blocks_via_hard_stop() {
     ] {
         // ci-full is required but never reported.
         let pack = with_ci(
-            pack_at_tier(t, true, false),
+            PackBuilder::new().risk(t).signed(true).build(),
             &[("ci-fast", CiConclusion::Success)],
         );
         let b = bundle_requiring(&["ci-fast", "ci-full"]);
@@ -604,7 +563,7 @@ fn ci_gate_missing_required_lane_blocks_via_hard_stop() {
 fn ci_gate_pending_required_lane_is_not_green() {
     // Pending is explicitly NOT green: a still-running required lane must block.
     let pack = with_ci(
-        pack_at_tier(RiskTier::R2, true, false),
+        PackBuilder::new().signed(true).build(),
         &[("ci-fast", CiConclusion::Pending)],
     );
     let b = bundle_requiring(&["ci-fast"]);
@@ -616,7 +575,7 @@ fn ci_gate_no_required_lanes_declared_is_back_compat() {
     // No required_ci_lanes → no CI gate, even with a red lane present in the
     // pack. Repos that haven't opted in keep merging as before.
     let pack = with_ci(
-        pack_at_tier(RiskTier::R2, true, false),
+        PackBuilder::new().signed(true).build(),
         &[("ci-fast", CiConclusion::Failure)],
     );
     let b = bundle(); // required_ci_lanes empty
@@ -627,7 +586,7 @@ fn ci_gate_no_required_lanes_declared_is_back_compat() {
 fn ci_gate_does_not_relax_r5_floor() {
     // Even with every required lane green, R5 stays human-required.
     let pack = with_ci(
-        pack_at_tier(RiskTier::R5, true, false),
+        PackBuilder::new().risk(RiskTier::R5).signed(true).build(),
         &[("ci-fast", CiConclusion::Success)],
     );
     let b = bundle_requiring(&["ci-fast"]);
@@ -641,7 +600,7 @@ fn ci_gate_does_not_relax_r5_floor() {
 fn ci_gate_names_surface_in_verdict_hard_stops() {
     // The verdict must name the specific CI hard stop so operators can see why.
     let pack = with_ci(
-        pack_at_tier(RiskTier::R2, true, false),
+        PackBuilder::new().signed(true).build(),
         &[("ci-full", CiConclusion::Failure)],
     );
     let b = bundle_requiring(&["ci-fast", "ci-full"]);
@@ -683,7 +642,7 @@ async fn ci_gate_kill_bell_still_downgrades_when_lanes_green() {
     // With all required lanes green full-auto AllowMerges; the kill bell must
     // still downgrade that AllowMerge to RequireHuman.
     let pack = with_ci(
-        pack_at_tier(RiskTier::R4, true, false),
+        PackBuilder::new().risk(RiskTier::R4).signed(true).build(),
         &[("ci-fast", CiConclusion::Success)],
     );
     let b = bundle_requiring(&["ci-fast"]);

@@ -1,81 +1,28 @@
 use super::*;
+use crate::test_support::{PackBuilder, receipt};
 use crate::types::*;
-use chrono::Utc;
-use jeryu_signing::Signature;
 
 fn pack_with_security(sast: ScanOutcome, dep: ScanOutcome, sec: ScanOutcome) -> EvidencePack {
-    EvidencePack {
-        schema: SchemaTag::new(),
-        id: "evp_xx".into(),
-        intent_id: None,
-        repo: "r".into(),
-        source_branch: "s".into(),
-        target_branch: "main".into(),
-        head_sha: "a".repeat(40),
-        base_sha: "b".repeat(40),
-        policy_sha: "c".repeat(40),
-        author_agent: None,
-        risk: RiskTier::R2,
-        changed_files: vec![],
-        claims: vec![],
-        tests: TestsSection {
-            targeted: vec![],
-            full_required: false,
-            skipped: vec![],
-            coverage_delta: None,
-        },
-        security: SecuritySection {
-            sast,
-            dependency_scan: dep,
-            secret_scan: sec,
-        },
-        supply_chain: SupplyChainSection::default(),
-        rollback: RollbackSection {
-            strategy: RollbackStrategy::RevertCommit,
-            feature_flag: None,
-            data_migration_reversible: Some(true),
-        },
-        gate_receipts: vec![],
-        ci_status: vec![],
-        evidence_digest: format!("sha256:{}", "0".repeat(64)),
-        created_at: Utc::now(),
-        signature: None,
-    }
+    PackBuilder::new().security(sast, dep, sec).build()
+}
+
+fn clean_pack() -> EvidencePack {
+    PackBuilder::new().build()
 }
 
 fn blocked_receipt() -> AgentApprovalReceipt {
-    AgentApprovalReceipt {
-        schema: SchemaTag::new(),
-        id: "aar_x".into(),
-        evidence_pack_id: "evp_xx".into(),
-        role: ReviewerRole::Security,
-        agent_id: "reviewer-security.v1".into(),
-        prompt_sha: None,
-        provider: None,
-        model: None,
-        temperature: None,
-        seed: None,
-        raw_response_sha: None,
-        head_sha: "a".repeat(40),
-        policy_sha: "c".repeat(40),
-        decision: ReviewDecision::Block,
-        reason: Some("sql injection".into()),
-        findings: vec![],
-        not_author: true,
-        tokens: TokenCounts::default(),
-        created_at: Utc::now(),
-        signature: Signature::unsigned(),
-    }
+    receipt(ReviewerRole::Security, "reviewer-security.v1")
+        .id("aar_x")
+        .decision(ReviewDecision::Block)
+        .reason("sql injection")
+        .raw_response_sha(None)
+        .build()
 }
 
 #[test]
 fn unknown_condition_fail_closes() {
     let reg = ConditionRegistry::default();
-    let p = pack_with_security(
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-    );
+    let p = clean_pack();
     let hits = reg.evaluate(&["does_not_exist".into()], &p, &[]);
     assert_eq!(hits.len(), 1);
     assert!(hits[0].name.starts_with("unknown_condition:"));
@@ -97,32 +44,14 @@ fn secret_scan_failed_triggers() {
 #[test]
 fn one_blocking_reviewer_is_a_hard_stop() {
     let reg = ConditionRegistry::default();
-    let p = pack_with_security(
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-    );
+    let p = clean_pack();
     let hits = reg.evaluate(&["reviewer_blocked".into()], &p, &[blocked_receipt()]);
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].name, "reviewer_blocked");
 }
 
 fn with_files(paths_and_lines: &[(&str, u32, u32)]) -> EvidencePack {
-    let mut p = pack_with_security(
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-    );
-    p.changed_files = paths_and_lines
-        .iter()
-        .map(|(path, add, rem)| ChangedFile {
-            path: (*path).into(),
-            risk_tags: vec![],
-            lines_added: *add,
-            lines_removed: *rem,
-        })
-        .collect();
-    p
+    PackBuilder::new().changed_files(paths_and_lines).build()
 }
 
 #[test]
@@ -152,11 +81,7 @@ fn removes_or_weakens_tests_tolerates_small_refactor() {
 #[test]
 fn coverage_threshold_lowered_fires_on_drop() {
     let reg = ConditionRegistry::default();
-    let mut p = pack_with_security(
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-    );
+    let mut p = clean_pack();
     p.tests.coverage_delta = Some(-3.5);
     let hits = reg.evaluate(&["coverage_threshold_lowered".into()], &p, &[]);
     assert_eq!(hits.len(), 1);
@@ -238,11 +163,7 @@ fn touches_secret_handling_fires() {
 #[test]
 fn introduces_new_external_code_source_fires() {
     let reg = ConditionRegistry::default();
-    let mut p = pack_with_security(
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-    );
+    let mut p = clean_pack();
     p.supply_chain.external_code_sources = vec!["https://example.com/gist/foo".into()];
     let hits = reg.evaluate(&["introduces_new_external_code_source".into()], &p, &[]);
     assert_eq!(hits.len(), 1);
@@ -284,11 +205,7 @@ fn wave3_release_conditions_are_registered() {
 #[test]
 fn wave3_release_conditions_are_externally_supplied() {
     let reg = ConditionRegistry::default();
-    let p = pack_with_security(
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-    );
+    let p = clean_pack();
     for name in [
         "release_artifact_unsigned",
         "release_sbom_missing",
@@ -321,11 +238,7 @@ fn path_matcher_does_not_misfire_on_windows_style_separators() {
 #[test]
 fn empty_pack_request_list_returns_no_hits() {
     let reg = ConditionRegistry::default();
-    let p = pack_with_security(
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-    );
+    let p = clean_pack();
     let hits = reg.evaluate(&[], &p, &[]);
     assert!(hits.is_empty(), "empty request must produce zero hits");
 }
@@ -333,11 +246,7 @@ fn empty_pack_request_list_returns_no_hits() {
 #[test]
 fn pack_with_all_tests_skipped_does_not_trigger_removes_or_weakens() {
     let reg = ConditionRegistry::default();
-    let mut p = pack_with_security(
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-    );
+    let mut p = clean_pack();
     p.tests.skipped = (0..50).map(|i| format!("test::skip_{i}")).collect();
     p.tests.targeted.clear();
     let hits = reg.evaluate(&["removes_or_weakens_tests".into()], &p, &[]);
@@ -350,11 +259,7 @@ fn pack_with_all_tests_skipped_does_not_trigger_removes_or_weakens() {
 #[test]
 fn clean_pack_no_hard_stops() {
     let reg = ConditionRegistry::default();
-    let p = pack_with_security(
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-    );
+    let p = clean_pack();
     let asked: Vec<String> = reg.names().iter().map(|s| s.to_string()).collect();
     let hits = reg.evaluate(&asked, &p, &[]);
     // evidence_signature_invalid fires because the pack is unsigned here.
@@ -392,11 +297,7 @@ fn ci_conditions_are_no_ops_in_the_registry_walk() {
     // judge via `ci_hard_stops`. A registry walk over the names alone fires
     // nothing.
     let reg = ConditionRegistry::default();
-    let p = pack_with_security(
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-    );
+    let p = clean_pack();
     let hits = reg.evaluate(
         &[
             "missing_required_ci_check".into(),
@@ -409,19 +310,7 @@ fn ci_conditions_are_no_ops_in_the_registry_walk() {
 }
 
 fn pack_with_ci(checks: &[(&str, CiConclusion)]) -> EvidencePack {
-    let mut p = pack_with_security(
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-    );
-    p.ci_status = checks
-        .iter()
-        .map(|(name, conclusion)| CiCheck {
-            name: (*name).to_string(),
-            conclusion: *conclusion,
-        })
-        .collect();
-    p
+    PackBuilder::new().ci(checks).build()
 }
 
 #[test]
