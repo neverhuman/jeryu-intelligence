@@ -28,93 +28,8 @@ fn unknown_condition_fail_closes() {
     assert!(hits[0].name.starts_with("unknown_condition:"));
 }
 
-#[test]
-fn secret_scan_failed_triggers() {
-    let reg = ConditionRegistry::default();
-    let p = pack_with_security(
-        ScanOutcome::Passed,
-        ScanOutcome::Passed,
-        ScanOutcome::Failed,
-    );
-    let hits = reg.evaluate(&["secret_scan_failed".into()], &p, &[]);
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].name, "secret_scan_failed");
-}
-
-#[test]
-fn one_blocking_reviewer_is_a_hard_stop() {
-    let reg = ConditionRegistry::default();
-    let p = clean_pack();
-    let hits = reg.evaluate(&["reviewer_blocked".into()], &p, &[blocked_receipt()]);
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].name, "reviewer_blocked");
-}
-
 fn with_files(paths_and_lines: &[(&str, u32, u32)]) -> EvidencePack {
     PackBuilder::new().changed_files(paths_and_lines).build()
-}
-
-#[test]
-fn removes_or_weakens_tests_fires_on_multiple_deletions() {
-    let reg = ConditionRegistry::default();
-    let p = with_files(&[
-        ("src/foo.rs", 30, 5),
-        ("tests/foo_test.rs", 0, 40),
-        ("src/foo/__tests__/bar.test.ts", 1, 20),
-    ]);
-    let hits = reg.evaluate(&["removes_or_weakens_tests".into()], &p, &[]);
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].name, "removes_or_weakens_tests");
-}
-
-#[test]
-fn removes_or_weakens_tests_tolerates_small_refactor() {
-    let reg = ConditionRegistry::default();
-    let p = with_files(&[("tests/util_test.rs", 8, 12)]);
-    let hits = reg.evaluate(&["removes_or_weakens_tests".into()], &p, &[]);
-    assert!(
-        hits.is_empty(),
-        "small single-file refactor should not fire"
-    );
-}
-
-#[test]
-fn coverage_threshold_lowered_fires_on_drop() {
-    let reg = ConditionRegistry::default();
-    let mut p = clean_pack();
-    p.tests.coverage_delta = Some(-3.5);
-    let hits = reg.evaluate(&["coverage_threshold_lowered".into()], &p, &[]);
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].name, "coverage_threshold_lowered");
-    p.tests.coverage_delta = Some(0.0);
-    let hits = reg.evaluate(&["coverage_threshold_lowered".into()], &p, &[]);
-    assert!(hits.is_empty());
-}
-
-#[test]
-fn snapshot_mass_replacement_fires_above_threshold() {
-    let reg = ConditionRegistry::default();
-    let p = with_files(&[("src/__snapshots__/widget.snap", 150, 80)]);
-    let hits = reg.evaluate(&["snapshot_mass_replacement".into()], &p, &[]);
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].name, "snapshot_mass_replacement");
-}
-
-#[test]
-fn changes_security_scanner_config_fires_on_deny_toml() {
-    let reg = ConditionRegistry::default();
-    let p = with_files(&[("deny.toml", 3, 1)]);
-    let hits = reg.evaluate(&["changes_security_scanner_config".into()], &p, &[]);
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].name, "changes_security_scanner_config");
-}
-
-#[test]
-fn changes_release_or_deploy_policy_fires_on_deploy_path() {
-    let reg = ConditionRegistry::default();
-    let p = with_files(&[("deploy/prod/k8s.yaml", 5, 0)]);
-    let hits = reg.evaluate(&["changes_release_or_deploy_policy".into()], &p, &[]);
-    assert_eq!(hits.len(), 1);
 }
 
 /// R-7 (D1): after the glob scrub, a contributor editing a path under the
@@ -141,49 +56,6 @@ fn legacy_external_ci_path_does_not_fire_after_glob_scrub() {
     let gh = with_files(&[(".github/workflows/release.yml", 5, 0)]);
     let hits = reg.evaluate(&["changes_release_or_deploy_policy".into()], &gh, &[]);
     assert_eq!(hits.len(), 1);
-}
-
-#[test]
-fn changes_agent_prompts_or_judge_policy_fires_on_prompt_edit() {
-    let reg = ConditionRegistry::default();
-    let p = with_files(&[(".jeryu/autonomy/prompts/reviewer-security.md", 10, 2)]);
-    let hits = reg.evaluate(&["changes_agent_prompts_or_judge_policy".into()], &p, &[]);
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].name, "changes_agent_prompts_or_judge_policy");
-}
-
-#[test]
-fn touches_secret_handling_fires() {
-    let reg = ConditionRegistry::default();
-    let p = with_files(&[("src/secrets/vault.rs", 12, 0)]);
-    let hits = reg.evaluate(&["touches_secret_handling".into()], &p, &[]);
-    assert_eq!(hits.len(), 1);
-}
-
-#[test]
-fn introduces_new_external_code_source_fires() {
-    let reg = ConditionRegistry::default();
-    let mut p = clean_pack();
-    p.supply_chain.external_code_sources = vec!["https://example.com/gist/foo".into()];
-    let hits = reg.evaluate(&["introduces_new_external_code_source".into()], &p, &[]);
-    assert_eq!(hits.len(), 1);
-}
-
-#[test]
-fn lockfile_diff_without_manifest_diff_fires() {
-    let reg = ConditionRegistry::default();
-    let p = with_files(&[("Cargo.lock", 20, 5), ("src/foo.rs", 3, 1)]);
-    let hits = reg.evaluate(&["lockfile_diff_without_manifest_diff".into()], &p, &[]);
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].name, "lockfile_diff_without_manifest_diff");
-}
-
-#[test]
-fn lockfile_with_matching_manifest_does_not_fire() {
-    let reg = ConditionRegistry::default();
-    let p = with_files(&[("Cargo.lock", 20, 5), ("Cargo.toml", 1, 1)]);
-    let hits = reg.evaluate(&["lockfile_diff_without_manifest_diff".into()], &p, &[]);
-    assert!(hits.is_empty(), "matching manifest must suppress the fire");
 }
 
 #[test]
@@ -244,19 +116,6 @@ fn empty_pack_request_list_returns_no_hits() {
 }
 
 #[test]
-fn pack_with_all_tests_skipped_does_not_trigger_removes_or_weakens() {
-    let reg = ConditionRegistry::default();
-    let mut p = clean_pack();
-    p.tests.skipped = (0..50).map(|i| format!("test::skip_{i}")).collect();
-    p.tests.targeted.clear();
-    let hits = reg.evaluate(&["removes_or_weakens_tests".into()], &p, &[]);
-    assert!(
-        hits.is_empty(),
-        "skipped tests without file deletions must not fire"
-    );
-}
-
-#[test]
 fn clean_pack_no_hard_stops() {
     let reg = ConditionRegistry::default();
     let p = clean_pack();
@@ -268,14 +127,196 @@ fn clean_pack_no_hard_stops() {
     assert!(!hits.iter().any(|h| h.name == "sast_failed"));
 }
 
+/// One named condition paired with the evidence that must (or must not) trip
+/// it. Every deterministic, pack-local condition is exercised through this one
+/// table, so a new condition is a new row rather than another copy of the same
+/// test.
+struct Case {
+    condition: &'static str,
+    pack: EvidencePack,
+    receipts: Vec<AgentApprovalReceipt>,
+    fires: bool,
+    why: &'static str,
+}
+
+fn pack_with_coverage_delta(delta: f64) -> EvidencePack {
+    let mut p = clean_pack();
+    p.tests.coverage_delta = Some(delta);
+    p
+}
+
+fn pack_with_skipped_tests(n: usize) -> EvidencePack {
+    let mut p = clean_pack();
+    p.tests.skipped = (0..n).map(|i| format!("test::skip_{i}")).collect();
+    p.tests.targeted.clear();
+    p
+}
+
+fn pack_with_external_source(url: &str) -> EvidencePack {
+    let mut p = clean_pack();
+    p.supply_chain.external_code_sources = vec![url.into()];
+    p
+}
+
+fn cases() -> Vec<Case> {
+    let fire = |condition, pack, why| Case {
+        condition,
+        pack,
+        receipts: vec![],
+        fires: true,
+        why,
+    };
+    let quiet = |condition, pack, why| Case {
+        condition,
+        pack,
+        receipts: vec![],
+        fires: false,
+        why,
+    };
+    vec![
+        fire(
+            "secret_scan_failed",
+            pack_with_security(ScanOutcome::Passed, ScanOutcome::Passed, ScanOutcome::Failed),
+            "a failed secret scan is a hard stop",
+        ),
+        Case {
+            condition: "reviewer_blocked",
+            pack: clean_pack(),
+            receipts: vec![blocked_receipt()],
+            fires: true,
+            why: "one blocking reviewer is a hard stop",
+        },
+        fire(
+            "removes_or_weakens_tests",
+            with_files(&[
+                ("src/foo.rs", 30, 5),
+                ("tests/foo_test.rs", 0, 40),
+                ("src/foo/__tests__/bar.test.ts", 1, 20),
+            ]),
+            "test files deleted across several paths",
+        ),
+        quiet(
+            "removes_or_weakens_tests",
+            with_files(&[("tests/util_test.rs", 8, 12)]),
+            "a small single-file refactor is not a weakening",
+        ),
+        quiet(
+            "removes_or_weakens_tests",
+            pack_with_skipped_tests(50),
+            "skipped tests without file deletions must not fire",
+        ),
+        fire(
+            "coverage_threshold_lowered",
+            pack_with_coverage_delta(-3.5),
+            "coverage dropped",
+        ),
+        quiet(
+            "coverage_threshold_lowered",
+            pack_with_coverage_delta(0.0),
+            "flat coverage is not a drop",
+        ),
+        fire(
+            "snapshot_mass_replacement",
+            with_files(&[("src/__snapshots__/widget.snap", 150, 80)]),
+            "a snapshot rewritten wholesale",
+        ),
+        fire(
+            "changes_security_scanner_config",
+            with_files(&[("deny.toml", 3, 1)]),
+            "the dependency-deny config is scanner config",
+        ),
+        fire(
+            "changes_release_or_deploy_policy",
+            with_files(&[("deploy/prod/k8s.yaml", 5, 0)]),
+            "a deploy manifest is release policy",
+        ),
+        fire(
+            "changes_agent_prompts_or_judge_policy",
+            with_files(&[(".jeryu/autonomy/prompts/reviewer-security.md", 10, 2)]),
+            "a reviewer prompt is judge policy",
+        ),
+        fire(
+            "touches_secret_handling",
+            with_files(&[("src/secrets/store.rs", 12, 0)]),
+            "a path under src/secrets handles secrets",
+        ),
+        fire(
+            "introduces_new_external_code_source",
+            pack_with_external_source("https://example.com/gist/foo"),
+            "code pulled from a gist is a new external source",
+        ),
+        fire(
+            "lockfile_diff_without_manifest_diff",
+            with_files(&[("Cargo.lock", 20, 5), ("src/foo.rs", 3, 1)]),
+            "a lockfile moved with no manifest behind it",
+        ),
+        quiet(
+            "lockfile_diff_without_manifest_diff",
+            with_files(&[("Cargo.lock", 20, 5), ("Cargo.toml", 1, 1)]),
+            "a matching manifest explains the lockfile diff",
+        ),
+    ]
+}
+
 #[test]
-fn registry_has_at_least_40_named_conditions() {
+fn named_conditions_fire_exactly_on_their_evidence() {
     let reg = ConditionRegistry::default();
+    for Case {
+        condition,
+        pack,
+        receipts,
+        fires,
+        why,
+    } in cases()
+    {
+        let hits = reg.evaluate(&[condition.to_string()], &pack, &receipts);
+        if fires {
+            assert_eq!(hits.len(), 1, "{condition}: {why}; got {hits:?}");
+            assert_eq!(hits[0].name, condition, "{condition}: {why}");
+        } else {
+            assert!(hits.is_empty(), "{condition}: {why}; got {hits:?}");
+        }
+    }
+}
+
+/// The property the registry owes policy: every condition name the shipped
+/// policy bundle references resolves, so a policy-driven walk never degrades
+/// into a fail-closed `unknown_condition:` hit. A bare count of registered
+/// names would still pass while the one name a policy needs went missing.
+#[test]
+fn every_condition_named_by_policy_is_registered() {
+    let reg = ConditionRegistry::default();
+    let bundle = crate::test_support::bundle();
+    let referenced: Vec<String> = bundle
+        .approvals
+        .hard_stops
+        .iter()
+        .map(|h| h.name.clone())
+        .chain(
+            bundle
+                .risk
+                .tiers
+                .iter()
+                .flat_map(|t| t.matchers.iter())
+                .flat_map(|m| m.conditions.iter().cloned()),
+        )
+        .chain(bundle.protected_paths.semantic_triggers.iter().cloned())
+        .collect();
     assert!(
-        reg.names().len() >= 30,
-        "expected the full named-condition registry; got {}",
-        reg.names().len()
+        !referenced.is_empty(),
+        "the policy fixtures must reference conditions"
     );
+    for name in &referenced {
+        assert!(
+            reg.lookup(name).is_some(),
+            "policy references `{name}`, which is not in the registry"
+        );
+    }
+    let mut names = reg.names();
+    let registered = names.len();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), registered, "condition names must be unique");
 }
 
 // --- CI gate (required-check lanes) -------------------------------------
