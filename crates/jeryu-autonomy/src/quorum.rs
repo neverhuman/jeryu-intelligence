@@ -58,17 +58,32 @@ pub fn evaluate_quorum(
             counted.retain(|r| r.not_author);
         }
     }
-    // Deduplicate by agent_id when require_distinct_agent_identities is set.
+    // Deduplicate by agent_id when distinct identities are required. A `Block`
+    // outranks the same agent's other receipts, so the verdict does not depend
+    // on the order the receipts arrived in.
     if policy.invariants.require_distinct_agent_identities {
+        let blocking_agents: HashSet<&str> = counted
+            .iter()
+            .filter(|r| matches!(r.decision, ReviewDecision::Block))
+            .map(|r| r.agent_id.as_str())
+            .collect();
         let mut seen: HashSet<&str> = HashSet::new();
-        counted.retain(|r| seen.insert(r.agent_id.as_str()));
+        counted.retain(|r| {
+            if blocking_agents.contains(r.agent_id.as_str())
+                && !matches!(r.decision, ReviewDecision::Block)
+            {
+                return false;
+            }
+            seen.insert(r.agent_id.as_str())
+        });
     }
 
-    let blocking_roles: Vec<ReviewerRole> = counted
+    let mut blocking_roles: Vec<ReviewerRole> = counted
         .iter()
         .filter(|r| matches!(r.decision, ReviewDecision::Block))
         .map(|r| r.role)
         .collect();
+    blocking_roles.sort();
     if !blocking_roles.is_empty() {
         return QuorumOutcome {
             decision: QuorumDecision::Vetoed,
@@ -80,16 +95,18 @@ pub fn evaluate_quorum(
         };
     }
 
-    let abstaining_roles: Vec<ReviewerRole> = counted
+    let mut abstaining_roles: Vec<ReviewerRole> = counted
         .iter()
         .filter(|r| matches!(r.decision, ReviewDecision::Abstain))
         .map(|r| r.role)
         .collect();
-    let passing_roles: Vec<ReviewerRole> = counted
+    let mut passing_roles: Vec<ReviewerRole> = counted
         .iter()
         .filter(|r| matches!(r.decision, ReviewDecision::Pass))
         .map(|r| r.role)
         .collect();
+    abstaining_roles.sort();
+    passing_roles.sort();
 
     let missing_roles: Vec<ReviewerRole> = entry
         .roles
@@ -319,5 +336,83 @@ mod tests {
         ];
         let outcome = evaluate_quorum(RiskTier::R2, &r, &p, None);
         assert_eq!(outcome.decision, QuorumDecision::Insufficient);
+    }
+
+    /// Every ordering of the same receipt set must give the same verdict.
+    fn permutations<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
+        if items.is_empty() {
+            return vec![vec![]];
+        }
+        let mut out = vec![];
+        for (i, item) in items.iter().enumerate() {
+            let mut rest = items.to_vec();
+            rest.remove(i);
+            for mut tail in permutations(&rest) {
+                tail.insert(0, item.clone());
+                out.push(tail);
+            }
+        }
+        out
+    }
+
+    fn assert_order_invariant(risk: RiskTier, receipts: &[AgentApprovalReceipt], p: &ApprovalsPolicy) {
+        let baseline = evaluate_quorum(risk, receipts, p, None);
+        for perm in permutations(receipts) {
+            let outcome = evaluate_quorum(risk, &perm, p, None);
+            let order: Vec<&str> = perm.iter().map(|r| r.agent_id.as_str()).collect();
+            assert_eq!(outcome.decision, baseline.decision, "order {order:?}");
+            assert_eq!(outcome.blocking_roles, baseline.blocking_roles, "order {order:?}");
+            assert_eq!(outcome.passing_roles, baseline.passing_roles, "order {order:?}");
+            assert_eq!(outcome.abstaining_roles, baseline.abstaining_roles, "order {order:?}");
+            assert_eq!(outcome.missing_roles, baseline.missing_roles, "order {order:?}");
+        }
+    }
+
+    #[test]
+    fn late_block_from_an_agent_that_already_passed_still_vetoes() {
+        let p = policy_with_quorum(
+            RiskTier::R2,
+            2,
+            vec![ReviewerRole::Security, ReviewerRole::TestIntegrity],
+            false,
+        );
+        let r = vec![
+            receipt(ReviewerRole::Security, "sec.v1", ReviewDecision::Pass),
+            receipt(ReviewerRole::Security, "sec.v1", ReviewDecision::Block),
+            receipt(ReviewerRole::TestIntegrity, "test.v1", ReviewDecision::Pass),
+        ];
+        assert_eq!(
+            evaluate_quorum(RiskTier::R2, &r, &p, None).decision,
+            QuorumDecision::Vetoed
+        );
+        assert_order_invariant(RiskTier::R2, &r, &p);
+    }
+
+    #[test]
+    fn verdict_is_invariant_under_receipt_permutation() {
+        let p = policy_with_quorum(
+            RiskTier::R2,
+            2,
+            vec![ReviewerRole::Security, ReviewerRole::TestIntegrity],
+            false,
+        );
+        let mixed = vec![
+            receipt(ReviewerRole::Security, "sec.v1", ReviewDecision::Pass),
+            receipt(ReviewerRole::TestIntegrity, "test.v1", ReviewDecision::Abstain),
+            receipt(ReviewerRole::Runtime, "rt.v1", ReviewDecision::Pass),
+            receipt(ReviewerRole::Runtime, "rt.v1", ReviewDecision::Block),
+        ];
+        assert_order_invariant(RiskTier::R2, &mixed, &p);
+
+        let no_block = vec![
+            receipt(ReviewerRole::Security, "sec.v1", ReviewDecision::Pass),
+            receipt(ReviewerRole::TestIntegrity, "test.v1", ReviewDecision::Pass),
+            receipt(ReviewerRole::Runtime, "rt.v1", ReviewDecision::Abstain),
+        ];
+        assert_eq!(
+            evaluate_quorum(RiskTier::R2, &no_block, &p, None).decision,
+            QuorumDecision::Met
+        );
+        assert_order_invariant(RiskTier::R2, &no_block, &p);
     }
 }
