@@ -39,6 +39,7 @@ pub(crate) const CATALOG: &[&str] = &[
     "agent_work.status",
     "agent_work.control",
     "agent_work.events",
+    "agent_work.tail",
     "agent_work.export_pr",
     "code.symbols.search",
     "code.definition",

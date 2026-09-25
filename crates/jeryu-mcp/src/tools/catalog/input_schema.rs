@@ -274,6 +274,14 @@ pub(super) fn tool_input_schema(action_id: &str) -> Option<Value> {
                 ("limit", integer_schema()),
             ],
         ),
+        "agent_work.tail" => object_schema(
+            &["agent_run_id"],
+            &[
+                ("agent_run_id", string_schema()),
+                ("after_seq", integer_schema()),
+                ("limit", integer_schema()),
+            ],
+        ),
         "agent_work.export_pr" => object_schema(
             &["agent_run_id", "owner", "repo", "author", "title"],
             &[

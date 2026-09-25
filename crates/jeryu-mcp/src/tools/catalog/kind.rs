@@ -33,6 +33,7 @@ pub(crate) enum ToolKind {
     AgentWorkStatus,
     AgentWorkControl,
     AgentWorkEvents,
+    AgentWorkTail,
     AgentWorkExportPr,
     CodeSymbolsSearch,
     CodeDefinition,
@@ -210,6 +211,11 @@ impl ToolDefinition {
                 "command": args.get("command")?.clone(),
             }),
             ToolKind::AgentWorkEvents => serde_json::json!({
+                "agent_run_id": s("agent_run_id")?,
+                "after_seq": args.get("after_seq").and_then(Value::as_i64),
+                "limit": args.get("limit").and_then(Value::as_i64),
+            }),
+            ToolKind::AgentWorkTail => serde_json::json!({
                 "agent_run_id": s("agent_run_id")?,
                 "after_seq": args.get("after_seq").and_then(Value::as_i64),
                 "limit": args.get("limit").and_then(Value::as_i64),

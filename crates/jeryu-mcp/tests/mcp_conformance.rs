@@ -146,7 +146,7 @@ fn manifest_covers_all_catalog_actions() {
         .filter_map(|tool| tool["name"].as_str().map(ToString::to_string))
         .collect();
 
-    // The 42-tool catalog (replaces the source's action_registry guardrail).
+    // The 43-tool catalog (replaces the source's action_registry guardrail).
     let expected = [
         "fetch_capsule",
         "get_system_snapshot",
@@ -173,6 +173,7 @@ fn manifest_covers_all_catalog_actions() {
         "agent_work.status",
         "agent_work.control",
         "agent_work.events",
+        "agent_work.tail",
         "agent_work.export_pr",
         "code.symbols.search",
         "code.definition",
@@ -197,8 +198,8 @@ fn manifest_covers_all_catalog_actions() {
     ];
     assert_eq!(
         names.len(),
-        46,
-        "expected exactly 46 tools, got {}",
+        47,
+        "expected exactly 47 tools, got {}",
         names.len()
     );
     for id in expected {
@@ -207,6 +208,71 @@ fn manifest_covers_all_catalog_actions() {
             "missing MCP tool for catalog action {id}"
         );
     }
+}
+
+/// Every tool name `jeryu-deploy`'s `WebMcpBackend` dispatches must exist in the
+/// catalog, otherwise `tools/call` rejects it as unknown and `tools/list` hides it.
+/// Mirrored by hand from `crates/jeryu-api/src/web/mcp_backend.rs` in `jeryu-deploy`,
+/// which is a separate repository and cannot be read from here.
+#[test]
+fn catalog_covers_every_web_backend_dispatch() {
+    let dispatched = [
+        "agent_work.start",
+        "agent_work.status",
+        "agent_work.control",
+        "agent_work.events",
+        "agent_work.tail",
+        "agent_work.export_pr",
+        "codegraph.query",
+        "code.symbols.search",
+        "code.definition",
+        "code.impact",
+        "code.crate.reverse_deps",
+        "code.references",
+        "codegraph.tool_build.status",
+        "codegraph.tool_build.clusters",
+        "codegraph.tool_build.feedback",
+        "tool_finder.clusters",
+        "tool_finder.scan",
+        "tool_finder.dashboard",
+        "tool_registry.summary",
+        "control_plane.status",
+        "control_plane.priorities",
+        "repo_graph.clusters",
+        "repo_graph.query",
+        "remote.status",
+        "artifacts.latest",
+        "runner_fabric.status",
+        "get_system_snapshot",
+        "get_ci_run_jobs",
+        "get_ci_bottlenecks",
+        "explain_blockers",
+        "plan_validation",
+    ];
+    let names: std::collections::BTreeSet<String> = tool_manifest()
+        .iter()
+        .filter_map(|tool| tool["name"].as_str().map(ToString::to_string))
+        .collect();
+    for id in dispatched {
+        assert!(
+            names.contains(&format!("jeryu.{id}")),
+            "web backend dispatches {id} but the catalog does not define it"
+        );
+    }
+}
+
+#[test]
+fn agent_work_tail_schema_matches_dispatch() {
+    let manifest = tool_manifest();
+    let tool = manifest
+        .iter()
+        .find(|tool| tool["name"] == "jeryu.agent_work.tail")
+        .expect("agent_work.tail is in the manifest");
+    let schema = &tool["inputSchema"];
+    assert_eq!(schema["required"], json!(["agent_run_id"]));
+    assert_eq!(schema["properties"]["agent_run_id"]["type"], "string");
+    assert_eq!(schema["properties"]["after_seq"]["type"], "integer");
+    assert_eq!(schema["properties"]["limit"]["type"], "integer");
 }
 
 #[test]
@@ -276,7 +342,7 @@ async fn stdio_initialize_and_tools_list_work() {
         .await;
     assert_eq!(list.len(), 1);
     assert!(list[0]["result"]["tools"].is_array());
-    assert_eq!(list[0]["result"]["tools"].as_array().unwrap().len(), 46);
+    assert_eq!(list[0]["result"]["tools"].as_array().unwrap().len(), 47);
 }
 
 #[tokio::test]

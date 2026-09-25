@@ -156,6 +156,12 @@ pub(crate) fn tool_definition(action_id: &str) -> Option<ToolDefinition> {
             tool_annotations(true, false, true, false),
             ToolKind::AgentWorkEvents,
         ),
+        "agent_work.tail" => (
+            "Agent work tty tail",
+            "Read raw tty output chunks for an agent run after a sequence number.",
+            tool_annotations(true, false, true, false),
+            ToolKind::AgentWorkTail,
+        ),
         "agent_work.export_pr" => (
             "Export agent work PR",
             "Export a finished workcell-backed agent run into a pull request.",
