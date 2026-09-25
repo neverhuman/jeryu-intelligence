@@ -31,7 +31,7 @@ pub fn is_loopback_origin(origin: &str) -> bool {
 #[derive(Clone)]
 pub struct McpHttpState {
     core: McpCore,
-    sessions: Arc<Mutex<HashMap<String, McpSessionState>>>,
+    sessions: Arc<Mutex<HashMap<String, Arc<Mutex<McpSessionState>>>>>,
 }
 
 impl McpHttpState {

@@ -1,18 +1,19 @@
 //! MCP JSON-RPC conformance suite (ported from `src/mcp/tests.rs`).
 //!
 //! Covers: manifest completeness, stdio initialize+tools/list, HTTP
-//! initialize -> tools/list -> tools/call -> delete round-trip, malformed JSON,
+//! initialize -> tools/list -> tools/call -> delete round-trip, concurrent requests
+//! on one session, malformed JSON,
 //! unknown tool, non-loopback Origin rejection, unknown session, GET-not-allowed,
 //! loopback-origin strictness, and the pr_number rename guard.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::http::StatusCode;
 use serde_json::json;
 
 use jeryu_mcp::{
-    MCP_PROTOCOL_VERSION, McpCore, McpHttpState, McpSessionState, MemoryBackend, mcp_router,
-    tool_manifest,
+    MCP_PROTOCOL_VERSION, McpCore, McpHttpState, McpSessionState, MemoryBackend, ToolBackend,
+    mcp_router, tool_manifest,
 };
 
 fn backend() -> Arc<MemoryBackend> {
@@ -567,6 +568,115 @@ async fn http_transport_initializes_and_executes_tools() {
         .await
         .unwrap();
     assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
+
+    server.abort();
+}
+
+/// Backend that parks one `tools/call` inside the handler until released, so a second
+/// request provably arrives while the first still holds the session.
+struct GatedBackend {
+    inner: MemoryBackend,
+    entered: std::sync::mpsc::SyncSender<()>,
+    release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl ToolBackend for GatedBackend {
+    fn call(
+        &self,
+        tool: &str,
+        args: serde_json::Value,
+        ctx: &jeryu_mcp::backend::McpCallContext,
+    ) -> anyhow::Result<jeryu_mcp::ToolResponse> {
+        if let Some(release) = self.release.lock().unwrap().take() {
+            self.entered.send(()).unwrap();
+            release.recv().unwrap();
+        }
+        self.inner.call(tool, args, ctx)
+    }
+
+    fn list(&self) -> Vec<jeryu_mcp::ToolDescriptor> {
+        self.inner.list()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn http_transport_serves_concurrent_requests_on_one_session() {
+    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let backend = Arc::new(GatedBackend {
+        inner: MemoryBackend::new(),
+        entered: entered_tx,
+        release: Mutex::new(Some(release_rx)),
+    });
+
+    let state = Arc::new(McpHttpState::new(backend));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, mcp_router(state)).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let origin = base.clone();
+    let client = reqwest::Client::new();
+    let (_init, session) = initialize_session(
+        &client,
+        &base,
+        &origin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "protocolVersion": MCP_PROTOCOL_VERSION }
+        }),
+    )
+    .await;
+
+    let first = tokio::spawn(
+        authenticated_post(&client, &base, &origin, &session, "tools/call")
+            .header("Mcp-Name", "jeryu.explain_blockers")
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "jeryu.explain_blockers",
+                    "arguments": { "entity_type": "merge", "entity_id": 1 }
+                }
+            }))
+            .send(),
+    );
+
+    // The first call is now parked inside the handler, still holding the session.
+    tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+        .await
+        .unwrap();
+
+    let second = tokio::spawn(
+        authenticated_post(&client, &base, &origin, &session, "tools/list")
+            .json(&json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {} }))
+            .send(),
+    );
+
+    // Give the second request time to reach the handler and queue on the session
+    // before the first one finishes; without per-session locking it 404s here.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    release_tx.send(()).unwrap();
+
+    let first = first.await.unwrap().unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let second = second.await.unwrap().unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_body: serde_json::Value = second.json().await.unwrap();
+    assert_eq!(second_body["id"], 3);
+    assert!(second_body["result"]["tools"].is_array());
+
+    // The session outlives both calls rather than being consumed by either.
+    let after = authenticated_post(&client, &base, &origin, &session, "tools/list")
+        .json(&json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(after.status(), StatusCode::OK);
 
     server.abort();
 }

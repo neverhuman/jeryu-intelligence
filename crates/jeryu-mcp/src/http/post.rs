@@ -10,6 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::Value;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::McpHttpState;
@@ -70,7 +71,7 @@ pub(crate) async fn handle_mcp_post(
 
         let session_id = Uuid::new_v4().to_string();
         let mut sessions = state.sessions.lock().await;
-        sessions.insert(session_id.clone(), session);
+        sessions.insert(session_id.clone(), Arc::new(Mutex::new(session)));
 
         return http_jsonrpc_response(
             StatusCode::OK,
@@ -114,16 +115,17 @@ pub(crate) async fn handle_mcp_post(
         }
     }
 
-    let mut sessions = state.sessions.lock().await;
-    let Some(mut session) = sessions.remove(session_id) else {
+    let sessions = state.sessions.lock().await;
+    let Some(session) = sessions.get(session_id).map(Arc::clone) else {
         return http_error(StatusCode::NOT_FOUND, "unknown MCP session");
     };
     drop(sessions);
 
+    // Lock only this session: concurrent requests on other sessions run in parallel,
+    // and the session survives in the map whatever happens to this call.
+    let mut session = session.lock().await;
     let response = state.core.handle_request(&mut session, request).await;
-
-    let mut sessions = state.sessions.lock().await;
-    sessions.insert(session_id.to_string(), session);
+    drop(session);
 
     match response {
         Some(result) => http_jsonrpc_response(StatusCode::OK, result, None),
