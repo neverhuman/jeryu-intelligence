@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use jeryu_codegraph::{
     CodeGraph, CodeGraphQuery, CodeGraphRepoIdentity, CodeGraphService, CodeGraphStore,
-    CodegraphQuery, CrateDepRow, GraphSnapshot, Slice, SymbolRefRow, SymbolRow,
+    CodegraphQuery, CrateDepRow, GraphSnapshot, SCHEMA, Slice, SymbolRefRow, SymbolRow,
     ToolBuildScanConfig, enforce_export_slice_from_diff, query_store, scan_tool_build_clusters,
     scan_tool_build_family,
 };
@@ -1201,4 +1201,20 @@ fn discovery_keeps_same_named_repositories_with_different_histories() {
     let roots = discover_system_repo_roots(std::slice::from_ref(&parent)).unwrap();
     let ids: Vec<&str> = roots.iter().map(|(id, _)| id.as_str()).collect();
     assert_eq!(ids, vec!["beta-split/docs", "docs"]);
+}
+
+#[test]
+fn schema_is_the_migration_file_and_reapplies_cleanly() {
+    let migration =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../db/migrations/0001_codegraph.sql");
+    assert_eq!(SCHEMA, std::fs::read_to_string(&migration).unwrap());
+
+    // Every statement is guarded, so opening an existing database re-applies the
+    // whole file without error.
+    let path = unique_db("schema-idempotent");
+    CodeGraphStore::open(&path).unwrap();
+    let store = CodeGraphStore::open(&path).unwrap();
+    assert_eq!(store.schema_version().unwrap(), "5");
+
+    let _ = std::fs::remove_file(&path);
 }
