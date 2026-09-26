@@ -15,6 +15,9 @@ if [[ -f Cargo.toml ]]; then
   fi
   if [[ "${JERYU_SPLIT_FULL_CHECK:-0}" == "1" ]]; then
     cargo check --workspace --all-targets --jobs "${JERYU_CI_JOBS:-40}"
+    # Cheap contract lane: only the symbol-schema example's drift test.
+    cargo test --locked -p jeryu-codegraph --example symbol-schema \
+      --jobs "${JERYU_CI_JOBS:-40}"
   fi
 fi
 

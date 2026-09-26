@@ -11,6 +11,13 @@ Use the local CI entrypoints before pushing changes:
 `scripts/ci-local.sh` delegates to the same `ops/ci/*.sh` lanes used by the
 GitHub workflow. `scripts/ci-doctor.sh` checks the required local tools.
 
+`just check` also runs the drift test of the generated symbol-row contract.
+Regenerate it from this repository root with
+`cargo run --locked -p jeryu-codegraph --example symbol-schema > contracts/codegraph.schema.json`.
+The Rust serialization uses `crate_name`, accepts empty strings and unknown input
+fields, and bounds `line` to an unsigned 32-bit integer. The schema preserves
+those semantics.
+
 Agent-readable exception guidance:
 
 - purpose: every typed error documents the caller-facing failure purpose
