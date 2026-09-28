@@ -208,7 +208,6 @@ const GENERIC_ANCHORS: &[&str] = &[
     "to_string",
     "to_uppercase",
     "to_vec",
-    "todo",
     "tostring",
     "trace",
     "trim",
