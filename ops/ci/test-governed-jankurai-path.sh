@@ -63,7 +63,7 @@ fi
 [[ "$("${governed_source}" --version)" == 'jankurai 1.6.11' ]] ||
   fail "governed Jankurai test source has the wrong version"
 [[ "$(sha256sum "${governed_source}" | awk '{print $1}')" == \
-   '9e6b8857a26f6004d4c74e510e13b06d880f2e2ae0c89502698889ed690c5d6c' ]] ||
+   'b05c03bcb0fb2d004d3daa303ae236b8985b39e393567e8f8d274cd9f6f89103' ]] ||
   fail "governed Jankurai test source has the wrong digest"
 
 broker_bin="${tmp}/broker/bin/jankurai"
