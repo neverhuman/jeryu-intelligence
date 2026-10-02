@@ -29,7 +29,7 @@ things are excluded by construction, because each one otherwise dominates every
 top finding with a non-lead:
 
 - **One repository stored twice.** Discovery identifies a repo by its name with
-  the owner stripped, so `jeryu/model-zoo` and `veox/model-zoo` are one repo and
+  the owner stripped, so `jeryu/model-zoo` and `acme/model-zoo` are one repo and
   only the family-canonical checkout is scanned. Two checkouts of one repository
   would make every file in it "duplicated across repos". Same-named repos with
   provably different git histories (different root commits) are both kept.
