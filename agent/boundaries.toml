@@ -12,7 +12,6 @@ cargo_members = [
   "crates/jeryu-rustjet",
   "crates/jeryu-rustjet-cli",
   "crates/jeryu-mcp",
-  "crates/jeryu-review",
   "crates/jeryu-autonomy",
 ]
 

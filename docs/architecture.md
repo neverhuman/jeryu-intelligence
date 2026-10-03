@@ -18,10 +18,19 @@ surfaces and consume sibling crates from pinned public Git tags.
 - `crates/jeryu-rustjet/**`
 - `crates/jeryu-rustjet-cli/**`
 - `crates/jeryu-mcp/**`
-- `crates/jeryu-review/**`
 - `crates/jeryu-autonomy/**`
 - `fixtures/rust-small/**`
 - `docs/codegraph-oracle.md`
 - `docs/codegraph-tool-build.md`
 - `ops/ci/codegraph-oracle.sh`
 - `ops/ci/codegraph-tool-build.sh`
+
+## Review And Merge Gating
+
+`crates/jeryu-autonomy` is advisory only: it posts the `jeryu/autonomy`
+check run, consumed by `jeryu-deploy`'s `jeryu-api` (feature `web`,
+`autonomy_bridge.rs`, called from `ci_bridge::on_push`). It is not a merge
+gate and never blocks a merge.
+
+The merge gate is pr-redteam in `jeryu-ci-runner` (`ops/pr-redteam`), which
+also performs LLM review. This repository holds no review orchestrator.

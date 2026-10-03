@@ -1,6 +1,6 @@
 # jeryu-intelligence
 
-Codegraph, RustJet, MCP intelligence, review, and autonomy analysis.
+Codegraph, RustJet, MCP intelligence, and autonomy analysis.
 
 This repository was seeded from Jeryu source commit `cbecf7caa0e932c76a341b2521e66e911233860d` by
 `ops/split/materialize.py`. It is part of the seven-repo Jeryu split family and keeps source
@@ -12,7 +12,6 @@ paths stable where practical so ownership remains auditable.
 - `crates/jeryu-rustjet`
 - `crates/jeryu-rustjet-cli`
 - `crates/jeryu-mcp`
-- `crates/jeryu-review`
 - `crates/jeryu-autonomy`
 
 ## Source Coverage
@@ -21,13 +20,18 @@ paths stable where practical so ownership remains auditable.
 - `crates/jeryu-rustjet/**`
 - `crates/jeryu-rustjet-cli/**`
 - `crates/jeryu-mcp/**`
-- `crates/jeryu-review/**`
 - `crates/jeryu-autonomy/**`
 - `fixtures/rust-small/**`
 - `docs/codegraph-oracle.md`
 - `docs/codegraph-tool-build.md`
 - `ops/ci/codegraph-oracle.sh`
 - `ops/ci/codegraph-tool-build.sh`
+
+## Review And Merge Gating
+
+`crates/jeryu-autonomy` only posts the advisory `jeryu/autonomy` check run; it
+never gates a merge. The merge gate is pr-redteam, which lives in
+`jeryu-ci-runner` under `ops/pr-redteam`.
 
 ## Local Commands
 

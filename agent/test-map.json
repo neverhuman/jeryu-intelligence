@@ -90,11 +90,6 @@
       "lane": "check",
       "purpose": "verify jeryu-intelligence owned source remains build-addressable"
     },
-    "crates/jeryu-review/": {
-      "command": "just check",
-      "lane": "check",
-      "purpose": "verify jeryu-intelligence owned source remains build-addressable"
-    },
     "crates/jeryu-rustjet-cli/": {
       "command": "just check",
       "lane": "check",

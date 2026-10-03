@@ -18,7 +18,6 @@
     "crates/jeryu-autonomy/": "jeryu-intelligence",
     "crates/jeryu-codegraph/": "jeryu-intelligence",
     "crates/jeryu-mcp/": "jeryu-intelligence",
-    "crates/jeryu-review/": "jeryu-intelligence",
     "crates/jeryu-rustjet-cli/": "jeryu-intelligence",
     "crates/jeryu-rustjet/": "jeryu-intelligence",
     "deny.toml": "workspace",
