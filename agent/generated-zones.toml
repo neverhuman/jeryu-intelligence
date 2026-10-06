@@ -7,3 +7,14 @@ manual_edits = false
 path = "contracts/codegraph.schema.json"
 generator = "cargo run --locked -p jeryu-codegraph --example symbol-schema"
 manual_edits = false
+
+# Jankurai's contract-source rule reads `[[zone]]` (the family `[[zones]]`
+# table above stays for codegraph's skip globs). Code-first: the schema is
+# regenerated from `SymbolRow`, and the example's own test is the drift check
+# that `just check` runs.
+[[zone]]
+path = "contracts/codegraph.schema.json"
+source = "crates/jeryu-codegraph/src/"
+command = "cargo run --locked -p jeryu-codegraph --example symbol-schema"
+read_only = true
+write_policy = "generated_output"
