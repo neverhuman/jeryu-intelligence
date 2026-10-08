@@ -335,16 +335,32 @@ mod tests {
         out
     }
 
-    fn assert_order_invariant(risk: RiskTier, receipts: &[AgentApprovalReceipt], p: &ApprovalsPolicy) {
+    fn assert_order_invariant(
+        risk: RiskTier,
+        receipts: &[AgentApprovalReceipt],
+        p: &ApprovalsPolicy,
+    ) {
         let baseline = evaluate_quorum(risk, receipts, p, None);
         for perm in permutations(receipts) {
             let outcome = evaluate_quorum(risk, &perm, p, None);
             let order: Vec<&str> = perm.iter().map(|r| r.agent_id.as_str()).collect();
             assert_eq!(outcome.decision, baseline.decision, "order {order:?}");
-            assert_eq!(outcome.blocking_roles, baseline.blocking_roles, "order {order:?}");
-            assert_eq!(outcome.passing_roles, baseline.passing_roles, "order {order:?}");
-            assert_eq!(outcome.abstaining_roles, baseline.abstaining_roles, "order {order:?}");
-            assert_eq!(outcome.missing_roles, baseline.missing_roles, "order {order:?}");
+            assert_eq!(
+                outcome.blocking_roles, baseline.blocking_roles,
+                "order {order:?}"
+            );
+            assert_eq!(
+                outcome.passing_roles, baseline.passing_roles,
+                "order {order:?}"
+            );
+            assert_eq!(
+                outcome.abstaining_roles, baseline.abstaining_roles,
+                "order {order:?}"
+            );
+            assert_eq!(
+                outcome.missing_roles, baseline.missing_roles,
+                "order {order:?}"
+            );
         }
     }
 
@@ -378,7 +394,11 @@ mod tests {
         );
         let mixed = vec![
             receipt(ReviewerRole::Security, "sec.v1", ReviewDecision::Pass),
-            receipt(ReviewerRole::TestIntegrity, "test.v1", ReviewDecision::Abstain),
+            receipt(
+                ReviewerRole::TestIntegrity,
+                "test.v1",
+                ReviewDecision::Abstain,
+            ),
             receipt(ReviewerRole::Runtime, "rt.v1", ReviewDecision::Pass),
             receipt(ReviewerRole::Runtime, "rt.v1", ReviewDecision::Block),
         ];
