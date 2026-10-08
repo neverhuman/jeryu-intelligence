@@ -15,6 +15,7 @@
 pub mod backend;
 pub mod core;
 pub mod http;
+pub mod session_terminal;
 pub mod tools;
 
 pub use backend::{BridgeBackend, BugStore, MemoryBackend, ToolBackend, ToolResponse};

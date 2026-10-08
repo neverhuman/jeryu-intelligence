@@ -40,6 +40,10 @@ pub(super) fn array_schema(items: Value) -> Value {
     serde_json::json!({ "type": "array", "items": items })
 }
 
+pub(super) fn boolean_schema() -> Value {
+    serde_json::json!({ "type": "boolean" })
+}
+
 pub(super) fn enum_schema(values: &[&str]) -> Value {
     serde_json::json!({ "type": "string", "enum": values })
 }

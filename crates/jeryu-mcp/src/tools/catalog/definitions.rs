@@ -5,6 +5,9 @@ use super::kind::{ToolDefinition, ToolKind};
 use crate::tools::schema::tool_annotations;
 
 pub(crate) fn tool_definition(action_id: &str) -> Option<ToolDefinition> {
+    if action_id.starts_with("session.") {
+        return super::session::definition(action_id, output_schema());
+    }
     let (title, description, annotations, kind) = match action_id {
         "fetch_capsule" => (
             "Fetch capsule",
@@ -293,7 +296,18 @@ pub(crate) fn tool_definition(action_id: &str) -> Option<ToolDefinition> {
 
     let input_schema = tool_input_schema(action_id)?;
 
-    let output_schema = serde_json::json!({
+    Some(ToolDefinition {
+        title,
+        description,
+        annotations,
+        input_schema,
+        output_schema: output_schema(),
+        kind,
+    })
+}
+
+fn output_schema() -> serde_json::Value {
+    serde_json::json!({
         "type": "object",
         "properties": {
             "success": { "type": "boolean" },
@@ -301,14 +315,5 @@ pub(crate) fn tool_definition(action_id: &str) -> Option<ToolDefinition> {
             "data": {}
         },
         "required": ["success", "message"]
-    });
-
-    Some(ToolDefinition {
-        title,
-        description,
-        annotations,
-        input_schema,
-        output_schema,
-        kind,
     })
 }

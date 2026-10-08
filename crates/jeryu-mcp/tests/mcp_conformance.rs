@@ -199,8 +199,8 @@ fn manifest_covers_all_catalog_actions() {
     ];
     assert_eq!(
         names.len(),
-        47,
-        "expected exactly 47 tools, got {}",
+        52,
+        "expected exactly 52 tools, got {}",
         names.len()
     );
     for id in expected {
@@ -343,7 +343,7 @@ async fn stdio_initialize_and_tools_list_work() {
         .await;
     assert_eq!(list.len(), 1);
     assert!(list[0]["result"]["tools"].is_array());
-    assert_eq!(list[0]["result"]["tools"].as_array().unwrap().len(), 47);
+    assert_eq!(list[0]["result"]["tools"].as_array().unwrap().len(), 52);
 }
 
 #[tokio::test]

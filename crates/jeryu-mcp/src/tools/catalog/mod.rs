@@ -6,6 +6,7 @@
 mod definitions;
 mod input_schema;
 mod kind;
+mod session;
 
 pub(crate) use definitions::tool_definition;
 #[allow(unused_imports)] // Preserves the historic `catalog::{ToolDefinition, ToolKind}` paths.

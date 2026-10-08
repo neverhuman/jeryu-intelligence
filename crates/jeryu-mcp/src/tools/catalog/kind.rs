@@ -53,6 +53,11 @@ pub(crate) enum ToolKind {
     RemoteStatus,
     ArtifactsLatest,
     RunnerFabricStatus,
+    SessionRead,
+    SessionSendInput,
+    SessionSendKeys,
+    SessionWaitFor,
+    SessionInterrupt,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +91,11 @@ impl ToolDefinition {
         let opt_s = |k: &str| args.get(k).and_then(Value::as_str).map(ToString::to_string);
 
         let out = match self.kind {
+            ToolKind::SessionRead
+            | ToolKind::SessionSendInput
+            | ToolKind::SessionSendKeys
+            | ToolKind::SessionWaitFor
+            | ToolKind::SessionInterrupt => return super::session::normalize(self.kind, &args),
             ToolKind::FetchCapsule => serde_json::json!({ "job_id": i("job_id")? }),
             ToolKind::GetSystemSnapshot => serde_json::json!({}),
             ToolKind::GetCiRunJobs => serde_json::json!({
