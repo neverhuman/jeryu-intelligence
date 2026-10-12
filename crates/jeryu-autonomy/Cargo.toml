@@ -9,7 +9,9 @@ license = "MIT OR Apache-2.0"
 jeryu-signing = { git = "https://github.com/neverhuman/jeryu-release-ops.git", tag = "jeryu-release-ops-v5.0.0-split.0", package = "jeryu-signing" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+# Maintained fork of the deprecated serde_yaml (RUSTSEC-2024-0449: unsafe-libyaml
+# is unmaintained). Renamed so the code keeps using `serde_yaml::`.
+serde_yaml = { package = "serde_norway", version = "0.9" }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 async-trait = "0.1"

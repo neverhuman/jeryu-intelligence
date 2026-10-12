@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+
+- jeryu-autonomy reads YAML through `serde_norway`, the maintained fork of
+  the deprecated `serde_yaml` (RUSTSEC-2024-0449: `unsafe-libyaml` is
+  unmaintained). The dependency is renamed, so callers still name
+  `serde_yaml::`; behaviour and the public error type are unchanged.
 - `jeryu-mcp` HTTP interop with standard MCP clients: `initialize` with another
   `protocolVersion` now answers with the server's version (letting the client
   decide) instead of a -32602 error; `Mcp-Method`, `MCP-Protocol-Version` and
