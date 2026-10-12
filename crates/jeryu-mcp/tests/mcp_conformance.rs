@@ -198,11 +198,23 @@ fn manifest_covers_all_catalog_actions() {
         "remote.status",
         "artifacts.latest",
         "runner_fabric.status",
+        "runner.status",
+        "session.read",
+        "session.send_input",
+        "session.send_keys",
+        "session.wait_for",
+        "session.interrupt",
+        "session.start",
+        "session.list",
+        "session.status",
+        "session.stop",
+        "session.attach",
+        "bot.activity",
     ];
     assert_eq!(
         names.len(),
-        52,
-        "expected exactly 52 tools, got {}",
+        59,
+        "expected exactly 59 tools, got {}",
         names.len()
     );
     for id in expected {
@@ -246,6 +258,17 @@ fn catalog_covers_every_web_backend_dispatch() {
         "remote.status",
         "artifacts.latest",
         "runner_fabric.status",
+        "runner.status",
+        "session.read",
+        "session.send_input",
+        "session.send_keys",
+        "session.wait_for",
+        "session.interrupt",
+        "session.start",
+        "session.list",
+        "session.status",
+        "session.stop",
+        "session.attach",
         "get_system_snapshot",
         "get_ci_run_jobs",
         "get_ci_bottlenecks",
@@ -345,7 +368,7 @@ async fn stdio_initialize_and_tools_list_work() {
         .await;
     assert_eq!(list.len(), 1);
     assert!(list[0]["result"]["tools"].is_array());
-    assert_eq!(list[0]["result"]["tools"].as_array().unwrap().len(), 52);
+    assert_eq!(list[0]["result"]["tools"].as_array().unwrap().len(), 59);
 }
 
 #[tokio::test]

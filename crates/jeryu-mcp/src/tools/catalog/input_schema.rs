@@ -388,6 +388,8 @@ pub(super) fn tool_input_schema(action_id: &str) -> Option<Value> {
         "remote.status" => object_schema(&[], &[("remote", string_schema())]),
         "artifacts.latest" => object_schema(&[], &[("repo", string_schema())]),
         "runner_fabric.status" => object_schema(&[], &[]),
+        "runner.status" => object_schema(&[], &[]),
+        "bot.activity" => object_schema(&[], &[("limit", integer_schema())]),
         _ => return None,
     };
     Some(schema)

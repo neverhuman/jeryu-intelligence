@@ -291,6 +291,18 @@ pub(crate) fn tool_definition(action_id: &str) -> Option<ToolDefinition> {
             tool_annotations(true, false, true, false),
             ToolKind::RunnerFabricStatus,
         ),
+        "runner.status" => (
+            "Session runner status",
+            "Report whether sandboxed agent sessions can start now: the session node, its identity and certificate expiry, capacity, and the caller's active sessions.",
+            tool_annotations(true, false, true, false),
+            ToolKind::RunnerStatus,
+        ),
+        "bot.activity" => (
+            "Bot activity",
+            "A Grokbot's or Musebot's own recent activity, newest first: each request it made and each session tool it called, the answer, and the session it worked.",
+            tool_annotations(true, false, true, false),
+            ToolKind::BotActivity,
+        ),
         _ => return None,
     };
 

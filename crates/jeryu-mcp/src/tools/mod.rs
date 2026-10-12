@@ -46,6 +46,11 @@ pub(crate) const CATALOG: &[&str] = &[
     "session.send_keys",
     "session.wait_for",
     "session.interrupt",
+    "session.start",
+    "session.list",
+    "session.status",
+    "session.stop",
+    "session.attach",
     "code.symbols.search",
     "code.definition",
     "code.impact",
@@ -66,6 +71,8 @@ pub(crate) const CATALOG: &[&str] = &[
     "remote.status",
     "artifacts.latest",
     "runner_fabric.status",
+    "runner.status",
+    "bot.activity",
 ];
 
 /// Return every catalog descriptor as MCP-shaped JSON for `tools/list`.

@@ -58,6 +58,13 @@ pub(crate) enum ToolKind {
     SessionSendKeys,
     SessionWaitFor,
     SessionInterrupt,
+    SessionStart,
+    SessionList,
+    SessionStatus,
+    SessionStop,
+    SessionAttach,
+    RunnerStatus,
+    BotActivity,
 }
 
 #[derive(Debug, Clone)]
@@ -95,7 +102,12 @@ impl ToolDefinition {
             | ToolKind::SessionSendInput
             | ToolKind::SessionSendKeys
             | ToolKind::SessionWaitFor
-            | ToolKind::SessionInterrupt => return super::session::normalize(self.kind, &args),
+            | ToolKind::SessionInterrupt
+            | ToolKind::SessionStart
+            | ToolKind::SessionList
+            | ToolKind::SessionStatus
+            | ToolKind::SessionStop
+            | ToolKind::SessionAttach => return super::session::normalize(self.kind, &args),
             ToolKind::FetchCapsule => serde_json::json!({ "job_id": i("job_id")? }),
             ToolKind::GetSystemSnapshot => serde_json::json!({}),
             ToolKind::GetCiRunJobs => serde_json::json!({
@@ -319,7 +331,14 @@ impl ToolDefinition {
             ToolKind::ArtifactsLatest => serde_json::json!({
                 "repo": opt_s("repo"),
             }),
-            ToolKind::RunnerFabricStatus => serde_json::json!({}),
+            ToolKind::RunnerFabricStatus | ToolKind::RunnerStatus => serde_json::json!({}),
+            // The newest events, 50 unless asked; at most 200.
+            ToolKind::BotActivity => serde_json::json!({
+                "limit": match args.get("limit") {
+                    None | Some(Value::Null) => 50,
+                    Some(value) => value.as_u64()?.clamp(1, 200),
+                },
+            }),
         };
         Some(out)
     }
