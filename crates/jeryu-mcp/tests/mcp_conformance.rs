@@ -4,7 +4,9 @@
 //! initialize -> tools/list -> tools/call -> delete round-trip, concurrent requests
 //! on one session, malformed JSON,
 //! unknown tool, non-loopback Origin rejection, unknown session, GET-not-allowed,
-//! loopback-origin strictness, and the pr_number rename guard.
+//! loopback-origin strictness, the pr_number rename guard, and interop with older
+//! clients (version negotiation, absent routing headers, DELETE with a JSON
+//! Content-Type).
 
 use std::sync::{Arc, Mutex};
 
@@ -775,6 +777,183 @@ async fn http_get_is_not_enabled() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+    server.abort();
+}
+
+/// Initialize as a client on an older protocol revision: no routing headers at all.
+async fn initialize_older_client(client: &reqwest::Client, base: &str) -> reqwest::Response {
+    client
+        .post(format!("{base}/mcp"))
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "clientInfo": { "name": "older-client", "version": "1.0.0" }
+            }
+        }))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn http_initialize_offers_server_version_to_older_clients() {
+    let (base, server) = spawn_http_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = initialize_older_client(&client, &base).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers().get("Mcp-Session-Id").is_some());
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.get("error").is_none(), "unexpected error: {body}");
+    assert_eq!(body["result"]["protocolVersion"], MCP_PROTOCOL_VERSION);
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn http_post_without_routing_headers_routes_by_body() {
+    let (base, server) = spawn_http_server().await;
+    let client = reqwest::Client::new();
+
+    let init = initialize_older_client(&client, &base).await;
+    assert_eq!(init.status(), StatusCode::OK);
+    let session = init.headers()["Mcp-Session-Id"]
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Only the session id: no Mcp-Method, MCP-Protocol-Version or Mcp-Name.
+    let post = |body: serde_json::Value| {
+        client
+            .post(format!("{base}/mcp"))
+            .header("Mcp-Session-Id", &session)
+            .json(&body)
+            .send()
+    };
+
+    let note = post(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+        .await
+        .unwrap();
+    assert_eq!(note.status(), StatusCode::ACCEPTED);
+
+    let list = post(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let list_body: serde_json::Value = list.json().await.unwrap();
+    assert!(list_body["result"]["tools"].is_array());
+
+    let call = post(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "jeryu.explain_blockers",
+            "arguments": { "entity_type": "merge", "entity_id": 1 }
+        }
+    }))
+    .await
+    .unwrap();
+    assert_eq!(call.status(), StatusCode::OK);
+    let call_body: serde_json::Value = call.json().await.unwrap();
+    assert!(call_body["result"]["content"].is_array(), "{call_body}");
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn http_routing_headers_that_contradict_the_body_are_rejected() {
+    let (base, client, session, server) = setup_authenticated_session().await;
+    let origin = base.clone();
+
+    let status = |builder: reqwest::RequestBuilder, body: serde_json::Value| async move {
+        builder.json(&body).send().await.unwrap().status()
+    };
+    let list_body = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+
+    // Mcp-Method names another method than the body.
+    let wrong_method = authenticated_post(&client, &base, &origin, &session, "tools/call");
+    assert_eq!(
+        status(wrong_method, list_body.clone()).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    // MCP-Protocol-Version differs from the negotiated version.
+    let wrong_version = client
+        .post(format!("{base}/mcp"))
+        .header("Mcp-Session-Id", &session)
+        .header("MCP-Protocol-Version", "2025-03-26");
+    assert_eq!(
+        status(wrong_version, list_body).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Mcp-Name differs from params.name / params.uri.
+    for (method, params) in [
+        (
+            "tools/call",
+            json!({ "name": "jeryu.explain_blockers", "arguments": {} }),
+        ),
+        ("prompts/get", json!({ "name": "real-prompt" })),
+        ("resources/read", json!({ "uri": "jeryu://real" })),
+    ] {
+        let builder = authenticated_post(&client, &base, &origin, &session, method)
+            .header("Mcp-Name", "something-else");
+        let body = json!({ "jsonrpc": "2.0", "id": 4, "method": method, "params": params });
+        assert_eq!(
+            status(builder, body).await,
+            StatusCode::BAD_REQUEST,
+            "Mcp-Name mismatch on {method}"
+        );
+    }
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn http_delete_ends_session_even_with_json_content_type() {
+    let (base, server) = spawn_http_server().await;
+    let client = reqwest::Client::new();
+
+    let init = initialize_older_client(&client, &base).await;
+    let session = init.headers()["Mcp-Session-Id"]
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Some SDKs send their default JSON Content-Type on a bodiless DELETE.
+    let delete = || {
+        client
+            .delete(format!("{base}/mcp"))
+            .header("Mcp-Session-Id", &session)
+            .header("Content-Type", "application/json")
+            .send()
+    };
+    assert_eq!(delete().await.unwrap().status(), StatusCode::NO_CONTENT);
+
+    let after = client
+        .post(format!("{base}/mcp"))
+        .header("Mcp-Session-Id", &session)
+        .json(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(after.status(), StatusCode::NOT_FOUND);
+    assert_eq!(delete().await.unwrap().status(), StatusCode::NOT_FOUND);
+
+    // A DELETE that actually carries a JSON body is still refused.
+    let with_body = client
+        .delete(format!("{base}/mcp"))
+        .header("Mcp-Session-Id", &session)
+        .json(&json!({ "jsonrpc": "2.0" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(with_body.status(), StatusCode::METHOD_NOT_ALLOWED);
 
     server.abort();
 }

@@ -1,5 +1,6 @@
 //! `POST /mcp` handler (port of `http_post.rs`): header validation, session minting,
-//! `Mcp-Method`/`Mcp-Name` header binding. No batch over HTTP.
+//! optional `Mcp-Method`/`MCP-Protocol-Version`/`Mcp-Name` headers bound to the body.
+//! No batch over HTTP.
 
 use std::sync::Arc;
 
@@ -45,11 +46,12 @@ pub(crate) async fn handle_mcp_post(
         Err(err) => return http_jsonrpc_error(None, -32600, &format!("invalid request: {err}")),
     };
 
-    let method_header = match header_value(&headers, "Mcp-Method") {
-        Some(value) => value.to_string(),
-        None => return http_error(StatusCode::BAD_REQUEST, "Mcp-Method header is required"),
-    };
-    if method_header != request.method {
+    // Routing headers are optional: clients on protocol revisions that predate them
+    // never send them, so the JSON-RPC body is the source of truth. A header that is
+    // present must agree with the body.
+    if let Some(method_header) = header_value(&headers, "Mcp-Method")
+        && method_header != request.method
+    {
         return http_error(
             StatusCode::BAD_REQUEST,
             "Mcp-Method header does not match body",
@@ -83,13 +85,11 @@ pub(crate) async fn handle_mcp_post(
         );
     }
 
-    let Some(protocol_version) = header_value(&headers, "MCP-Protocol-Version") else {
-        return http_error(
-            StatusCode::BAD_REQUEST,
-            "MCP-Protocol-Version header is required",
-        );
-    };
-    if protocol_version != MCP_PROTOCOL_VERSION {
+    // Absent = the version negotiated at initialize (the server only ever offers
+    // its own); present = it must be that version.
+    if let Some(protocol_version) = header_value(&headers, "MCP-Protocol-Version")
+        && protocol_version != MCP_PROTOCOL_VERSION
+    {
         return http_error(
             StatusCode::BAD_REQUEST,
             "unsupported MCP-Protocol-Version header",
@@ -100,14 +100,15 @@ pub(crate) async fn handle_mcp_post(
         return http_error(StatusCode::BAD_REQUEST, "Mcp-Session-Id header is required");
     };
 
-    if request.method == "tools/call" {
-        let Some(name_header) = header_value(&headers, "Mcp-Name") else {
-            return http_error(StatusCode::BAD_REQUEST, "Mcp-Name header is required");
-        };
-        if let Some(params) = request.params.as_ref()
-            && let Some(name) = params.get("name").and_then(Value::as_str)
-            && name != name_header
-        {
+    if let Some(name_header) = header_value(&headers, "Mcp-Name")
+        && let Some(field) = mcp_name_field(&request.method)
+    {
+        let body_name = request
+            .params
+            .as_ref()
+            .and_then(|params| params.get(field))
+            .and_then(Value::as_str);
+        if body_name != Some(name_header) {
             return http_error(
                 StatusCode::BAD_REQUEST,
                 "Mcp-Name header does not match body",
@@ -130,5 +131,14 @@ pub(crate) async fn handle_mcp_post(
     match response {
         Some(result) => http_jsonrpc_response(StatusCode::OK, result, None),
         None => StatusCode::ACCEPTED.into_response(),
+    }
+}
+
+/// The body field an `Mcp-Name` header names for `method`, if the method has one.
+fn mcp_name_field(method: &str) -> Option<&'static str> {
+    match method {
+        "tools/call" | "prompts/get" => Some("name"),
+        "resources/read" => Some("uri"),
+        _ => None,
     }
 }

@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- `jeryu-mcp` HTTP interop with standard MCP clients: `initialize` with another
+  `protocolVersion` now answers with the server's version (letting the client
+  decide) instead of a -32602 error; `Mcp-Method`, `MCP-Protocol-Version` and
+  `Mcp-Name` are optional (the body routes the request) but still 400 when they
+  contradict the body or the negotiated version, and `Mcp-Name` is now also
+  bound for `prompts/get` (`params.name`) and `resources/read` (`params.uri`);
+  a bodiless session `DELETE` that carries a JSON `Content-Type` ends the
+  session instead of answering 405.
 - Tool-build clusters are ranked by the duplication a shared tool would remove
   (one copy's tokens times the copies past the first), weighted by cross-repo
   spread and by how many domain anchors the window carries, instead of by a

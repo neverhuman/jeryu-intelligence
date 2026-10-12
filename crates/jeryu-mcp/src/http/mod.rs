@@ -5,6 +5,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use anyhow::{Result, bail};
 use axum::{
     Router,
+    body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -84,8 +85,11 @@ pub(crate) async fn handle_mcp_get() -> Response {
 pub(crate) async fn handle_mcp_delete(
     State(state): State<Arc<McpHttpState>>,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
-    if let Err(response) = validate_mcp_http_headers(&headers, false) {
+    // Some client SDKs send their default `Content-Type: application/json` on every
+    // request, DELETE included, with no body. Only an actual body is refused.
+    if let Err(response) = validate_mcp_http_headers(&headers, body.is_empty()) {
         return response;
     }
 

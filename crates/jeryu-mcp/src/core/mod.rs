@@ -161,14 +161,15 @@ impl McpCore {
                 );
             }
         };
+        // Version negotiation: the server speaks exactly one protocol version, so it
+        // answers with that version whatever the client requested; a client that
+        // cannot speak it disconnects. Rejecting the request outright would lock out
+        // every client pinned to an older (or newer) revision.
         if req.protocol_version != MCP_PROTOCOL_VERSION {
-            return jsonrpc_error(
-                Some(id),
-                -32602,
-                &format!(
-                    "unsupported protocolVersion '{}', expected '{}'",
-                    req.protocol_version, MCP_PROTOCOL_VERSION
-                ),
+            tracing::debug!(
+                requested = %req.protocol_version,
+                offered = MCP_PROTOCOL_VERSION,
+                "MCP initialize requested another protocol version; offering ours"
             );
         }
 
