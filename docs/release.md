@@ -3,8 +3,10 @@
 This split member publishes source changes through pinned tags; `jeryu-deploy` remains the binary release authority.
 
 Version source is `VERSION` plus the split tag recorded in
-`repos.manifest.toml` when present. Release notes are recorded in
-`CHANGELOG.md`.
+`repos.manifest.toml` when present. Release notes are generated when the
+release is cut, from the commits since the previous release (their subjects and
+`Todo:` trailers); cutting a release rolls the `## Unreleased` section of
+`CHANGELOG.md` under the new version. A change does not add a changelog entry.
 
 ## Release Gate
 
