@@ -128,7 +128,7 @@ pub(super) fn definition(action_id: &str, output_schema: Value) -> Option<ToolDe
             "Wait until terminal text after a cursor contains a substring, or matches a regular expression, up to timeout_ms (at most 60000). Give exactly one of contains or regex.",
             tool_annotations(true, false, false, false),
             ToolKind::SessionWaitFor,
-            object_schema(
+            exactly_one_pattern(object_schema(
                 &["session_id"],
                 &[
                     id(),
@@ -137,7 +137,7 @@ pub(super) fn definition(action_id: &str, output_schema: Value) -> Option<ToolDe
                     ("regex", string_schema()),
                     ("timeout_ms", integer_schema()),
                 ],
-            ),
+            )),
         ),
         "session.interrupt" => (
             "Interrupt session",
@@ -234,9 +234,17 @@ pub(super) fn normalize(kind: ToolKind, args: &Value) -> Option<Value> {
             serde_json::json!({ "session_id": session_id, "bytes_b64": encode(&input) })
         }
         ToolKind::SessionWaitFor => {
-            let contains = args.get("contains").and_then(Value::as_str);
-            let regex = args.get("regex").and_then(Value::as_str);
-            // Exactly one of contains or regex; the backend compiles the regex.
+            // Exactly one of contains or regex, each a string when given: a
+            // value of another type is refused, never read as absent. The
+            // backend compiles the regex.
+            let given = |name: &str| match args.get(name) {
+                None => Ok(None),
+                Some(Value::String(text)) => Ok(Some(text.as_str())),
+                Some(_) => Err(()),
+            };
+            let (Ok(contains), Ok(regex)) = (given("contains"), given("regex")) else {
+                return None;
+            };
             let (field, pattern) = match (contains, regex) {
                 (Some(text), None) => ("contains", text),
                 (None, Some(pattern)) => ("regex", pattern),
@@ -269,6 +277,16 @@ pub(super) fn normalize(kind: ToolKind, args: &Value) -> Option<Value> {
 }
 
 /// A short identifier-like value: 1..=max bytes of `[A-Za-z0-9._:/@-]`.
+/// `session.wait_for`'s schema says what its normalizer enforces: exactly
+/// one of `contains` or `regex`.
+fn exactly_one_pattern(mut schema: Value) -> Value {
+    schema["oneOf"] = serde_json::json!([
+        { "required": ["contains"] },
+        { "required": ["regex"] },
+    ]);
+    schema
+}
+
 fn token(value: &str, max: usize) -> bool {
     !value.is_empty()
         && value.len() <= max
@@ -478,6 +496,26 @@ mod tests {
         assert!(normalize(ToolKind::SessionWaitFor, &neither).is_none());
         let long = json!({"session_id": "vm-ar-1", "regex": "x".repeat(MAX_PATTERN_BYTES + 1)});
         assert!(normalize(ToolKind::SessionWaitFor, &long).is_none());
+        // A value of the wrong type is refused, even beside a valid other one.
+        for ill_typed in [
+            json!({"session_id": "vm-ar-1", "contains": 5, "regex": "x"}),
+            json!({"session_id": "vm-ar-1", "contains": "a", "regex": false}),
+            json!({"session_id": "vm-ar-1", "contains": null, "regex": "x"}),
+            json!({"session_id": "vm-ar-1", "regex": ["x"]}),
+        ] {
+            assert!(
+                normalize(ToolKind::SessionWaitFor, &ill_typed).is_none(),
+                "{ill_typed}"
+            );
+        }
+        // The advertised schema says the same: exactly one of the two.
+        let schema = definition("session.wait_for", json!({}))
+            .expect("wait_for")
+            .input_schema;
+        assert_eq!(
+            schema["oneOf"],
+            json!([{ "required": ["contains"] }, { "required": ["regex"] }])
+        );
     }
 
     #[test]
