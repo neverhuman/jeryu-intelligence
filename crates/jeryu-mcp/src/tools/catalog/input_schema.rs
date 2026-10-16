@@ -6,6 +6,19 @@ use crate::tools::schema::*;
 
 pub(super) fn tool_input_schema(action_id: &str) -> Option<Value> {
     let schema = match action_id {
+        "pull.workflow_status" => object_schema(
+            &["repo", "number"],
+            &[
+                (
+                    "repo",
+                    serde_json::json!({ "type": "string", "minLength": 1 }),
+                ),
+                (
+                    "number",
+                    serde_json::json!({ "type": "integer", "minimum": 1 }),
+                ),
+            ],
+        ),
         "fetch_capsule" => object_schema(&["job_id"], &[("job_id", integer_schema())]),
         "get_system_snapshot" => object_schema(&[], &[]),
         "get_ci_run_jobs" => object_schema(

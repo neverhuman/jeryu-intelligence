@@ -9,6 +9,12 @@ pub(crate) fn tool_definition(action_id: &str) -> Option<ToolDefinition> {
         return super::session::definition(action_id, output_schema());
     }
     let (title, description, annotations, kind) = match action_id {
+        "pull.workflow_status" => (
+            "Pull request workflow status",
+            "Read the aggregate head-bound pull request workflow status within the caller's repository grant. Requires an authorized forge read adapter.",
+            tool_annotations(true, false, true, false),
+            ToolKind::PullWorkflowStatus,
+        ),
         "fetch_capsule" => (
             "Fetch capsule",
             "Fetch the latest structured failure capsule for a job.",

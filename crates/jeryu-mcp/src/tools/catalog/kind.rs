@@ -8,6 +8,7 @@ use crate::tools::schema::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolKind {
+    PullWorkflowStatus,
     FetchCapsule,
     GetSystemSnapshot,
     GetCiRunJobs,
@@ -108,6 +109,17 @@ impl ToolDefinition {
             | ToolKind::SessionStatus
             | ToolKind::SessionStop
             | ToolKind::SessionAttach => return super::session::normalize(self.kind, &args),
+            ToolKind::PullWorkflowStatus => {
+                let repo = s("repo")?;
+                if repo.is_empty() {
+                    return None;
+                }
+                let number = args.get("number")?.as_u64()?;
+                if number == 0 {
+                    return None;
+                }
+                serde_json::json!({ "repo": repo, "number": number })
+            }
             ToolKind::FetchCapsule => serde_json::json!({ "job_id": i("job_id")? }),
             ToolKind::GetSystemSnapshot => serde_json::json!({}),
             ToolKind::GetCiRunJobs => serde_json::json!({

@@ -120,6 +120,9 @@ impl ToolBackend for MemoryBackend {
         // deterministic, brandless response per tool family.
         let arg = |k: &str| args.get(k).cloned().unwrap_or(Value::Null);
         let resp = match tool {
+            "pull.workflow_status" => ToolResponse::error(
+                "pull.workflow_status is unavailable: no authorized forge read adapter is installed",
+            ),
             "fetch_capsule" => ToolResponse::ok(
                 "fetched capsule",
                 serde_json::json!({ "job_id": arg("job_id"), "capsule": Value::Null }),
