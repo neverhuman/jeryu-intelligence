@@ -115,9 +115,10 @@ fn read_to_string(path: &Path) -> RustJetResult<String> {
 
 fn parse_workspace_members(text: &str, path: &Path) -> RustJetResult<Vec<String>> {
     let Some(array) = parse_array(text, "members") else {
-        // A plain `[package]` manifest with no `[workspace]` is a one-member
-        // workspace rooted at the manifest's own directory.
-        if text.contains("[package]") && !text.contains("[workspace]") {
+        // A single-crate repo: a `[package]` manifest with no members array
+        // (even with a bare `[workspace]` table detaching it from a parent)
+        // is a one-member workspace rooted at the manifest's own directory.
+        if text.lines().any(|line| line.trim() == "[package]") {
             return Ok(vec![".".to_string()]);
         }
         return Err(RustJetError::parse(
@@ -260,9 +261,14 @@ members = [
 
     #[test]
     fn package_only_manifest_is_one_member_workspace() {
-        let text = "[package]\nname = \"solo\"\nversion = \"0.1.0\"\n";
-        let members = parse_workspace_members(text, Path::new("Cargo.toml")).unwrap();
-        assert_eq!(members, vec!["."]);
+        for text in [
+            "[package]\nname = \"solo\"\nversion = \"0.1.0\"\n",
+            // A bare `[workspace]` detaches the crate from a parent workspace.
+            "[package]\nname = \"solo\"\n\n[workspace]\n",
+        ] {
+            let members = parse_workspace_members(text, Path::new("Cargo.toml")).unwrap();
+            assert_eq!(members, vec!["."]);
+        }
     }
 
     #[test]
