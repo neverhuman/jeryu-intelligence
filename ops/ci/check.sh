@@ -3,6 +3,7 @@ set -euo pipefail
 
 source ops/ci/lib.sh
 bash ops/ci/test-governed-jankurai-path.sh
+bash ops/ci/test-build-cache.sh
 if [[ -f Cargo.toml ]]; then
   cargo metadata --format-version 1 --no-deps >/dev/null
   # The signing primitives have one owner: the jeryu-signing crate in
