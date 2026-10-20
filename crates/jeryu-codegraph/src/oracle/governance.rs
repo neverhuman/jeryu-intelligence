@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use super::types::GeneratedZoneHit;
 use crate::error::{CodeGraphError, Result};
+use crate::generated_zones::{GeneratedZoneSpec, parse_generated_zones};
 
 const GOVERNANCE_FILES: [(&str, &str); 5] = [
     ("AGENTS.md", "agents"),
@@ -18,7 +19,7 @@ const GOVERNANCE_FILES: [(&str, &str); 5] = [
 pub(super) struct GovernanceMetadata {
     owner_rules: Vec<OwnerRule>,
     test_rules: Vec<TestRule>,
-    generated_zones: Vec<GeneratedZoneRule>,
+    generated_zones: Vec<GeneratedZoneSpec>,
     pub(super) proof_lanes: BTreeMap<String, ProofLaneRule>,
     pub(super) loaded_files: Vec<LoadedGovernanceFile>,
     pub(super) repo_files: Vec<String>,
@@ -78,12 +79,11 @@ impl GovernanceMetadata {
                     metadata.test_rules.sort_by(|a, b| a.path.cmp(&b.path));
                 }
                 "generated_zones" => {
-                    let parsed: GeneratedZonesFile =
-                        toml::from_str(&text).map_err(|err| CodeGraphError::Governance {
+                    metadata.generated_zones =
+                        parse_generated_zones(&text).map_err(|err| CodeGraphError::Governance {
                             path: path.to_string(),
                             message: err.to_string(),
                         })?;
-                    metadata.generated_zones = parsed.zones;
                     metadata.generated_zones.sort_by(|a, b| a.path.cmp(&b.path));
                 }
                 "proof_lanes" => {
@@ -157,18 +157,6 @@ pub(super) struct TestRule {
     pub(super) command: String,
     pub(super) purpose: String,
     pub(super) lane: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct GeneratedZonesFile {
-    zones: Vec<GeneratedZoneRule>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct GeneratedZoneRule {
-    path: String,
-    generator: String,
-    manual_edits: bool,
 }
 
 #[derive(Debug, Deserialize)]

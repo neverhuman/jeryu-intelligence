@@ -11,10 +11,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde::Deserialize;
-
 use super::ToolBuildScanOptions;
 use crate::error::{CodeGraphError, Result};
+use crate::generated_zones::parse_generated_zones;
 
 /// How a repo-relative path participates in the scan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -399,17 +398,6 @@ fn is_test_path(rel: &str, file_name: &str) -> bool {
         || file_name == "conftest.py"
 }
 
-#[derive(Debug, Deserialize)]
-struct GeneratedZonesFile {
-    #[serde(default)]
-    zones: Vec<GeneratedZone>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GeneratedZone {
-    path: Option<String>,
-}
-
 /// Load a repo's `agent/generated-zones.toml` skip globs (family standard).
 /// Missing or malformed files yield no zones — discovery must never fail on
 /// metadata drift.
@@ -418,14 +406,10 @@ fn load_generated_zones(root: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
-    let Ok(parsed) = toml::from_str::<GeneratedZonesFile>(&text) else {
+    let Ok(zones) = parse_generated_zones(&text) else {
         return Vec::new();
     };
-    parsed
-        .zones
-        .into_iter()
-        .filter_map(|zone| zone.path)
-        .collect()
+    zones.into_iter().map(|zone| zone.path).collect()
 }
 
 /// Minimal glob matcher over `/`-separated paths supporting `**` (any number

@@ -73,7 +73,10 @@ impl WorkspaceManifest {
             let package_text = read_to_string(&package_manifest)?;
             let mut package = parse_package_manifest(&package_text, &package_manifest)?;
             package.root = member_root;
-            package.relative_root = normalize_relative(&root, &package.root);
+            package.relative_root = match normalize_relative(&root, &package.root) {
+                rel if rel.is_empty() => ".".to_string(),
+                rel => rel,
+            };
             package.manifest_path = package_manifest;
             packages.insert(package.name.clone(), package);
         }
@@ -112,6 +115,11 @@ fn read_to_string(path: &Path) -> RustJetResult<String> {
 
 fn parse_workspace_members(text: &str, path: &Path) -> RustJetResult<Vec<String>> {
     let Some(array) = parse_array(text, "members") else {
+        // A plain `[package]` manifest with no `[workspace]` is a one-member
+        // workspace rooted at the manifest's own directory.
+        if text.contains("[package]") && !text.contains("[workspace]") {
+            return Ok(vec![".".to_string()]);
+        }
         return Err(RustJetError::parse(
             path,
             "workspace members array not found",
@@ -248,5 +256,36 @@ members = [
 "#;
         let members = parse_workspace_members(text, Path::new("Cargo.toml")).unwrap();
         assert_eq!(members, vec!["crates/a", "crates/b"]);
+    }
+
+    #[test]
+    fn package_only_manifest_is_one_member_workspace() {
+        let text = "[package]\nname = \"solo\"\nversion = \"0.1.0\"\n";
+        let members = parse_workspace_members(text, Path::new("Cargo.toml")).unwrap();
+        assert_eq!(members, vec!["."]);
+    }
+
+    #[test]
+    fn workspace_without_members_still_errors() {
+        let text = "[workspace]\nresolver = \"2\"\n";
+        assert!(parse_workspace_members(text, Path::new("Cargo.toml")).is_err());
+    }
+
+    #[test]
+    fn loads_single_crate_repo() {
+        let dir = std::env::temp_dir().join(format!("rustjet-solo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"solo\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1\"\n",
+        )
+        .unwrap();
+        let manifest = WorkspaceManifest::load(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(
+            manifest.package_names().into_iter().collect::<Vec<_>>(),
+            ["solo"]
+        );
+        assert_eq!(manifest.packages["solo"].relative_root, ".");
     }
 }

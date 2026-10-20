@@ -12,6 +12,7 @@
 
 pub mod error;
 pub mod export_gate;
+pub(crate) mod generated_zones;
 pub mod graph;
 pub mod oracle;
 pub mod slice;
