@@ -78,6 +78,9 @@ bash ops/ci/score.sh
 bash ops/ci/security.sh
 bash ops/ci/artifact_support.sh
 
+# Evidence must pass before the required check succeeds.
+bash ops/ci/proof_evidence.sh
+
 echo "[pr-ci] workspace test suite" >&2
 cargo nextest run --workspace --build-jobs "$JOBS" --test-threads "$JOBS"
 echo "[pr-ci] codegraph oracle + tool-build lanes" >&2

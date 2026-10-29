@@ -194,6 +194,11 @@
       "command": "just fast && just check && just score",
       "lane": "ci",
       "purpose": "verify local ops guidance and CI wrappers stay reproducible"
+    },
+    "tools/": {
+      "command": "just security",
+      "lane": "security",
+      "purpose": "verify the security entrypoint delegates to repository checks"
     }
   },
   "workspace": "jeryu-intelligence"

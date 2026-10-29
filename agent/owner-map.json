@@ -38,7 +38,8 @@
     "tests/": "tests",
     "agent/tool-adoption.toml": "agent",
     "db/": "jeryu-intelligence",
-    "contracts/": "jeryu-intelligence"
+    "contracts/": "jeryu-intelligence",
+    "tools/": "ops"
   },
   "workspace": "jeryu-intelligence"
 }
