@@ -140,6 +140,16 @@
       "lane": "ci",
       "purpose": "verify local CI wrappers are reproducible and audit-visible"
     },
+    "ops/ci/proof_baseline.sh": {
+      "command": "cargo test --locked -p jeryu-codegraph --test proof_evidence_lane",
+      "lane": "check",
+      "purpose": "verify the ratchet baseline guards refuse a baseline the head can write"
+    },
+    "ops/ci/proof_evidence.sh": {
+      "command": "cargo test --locked -p jeryu-codegraph --test proof_evidence_lane",
+      "lane": "check",
+      "purpose": "verify the evidence lane gates every tool result it produces"
+    },
     "ops/ci/codegraph-oracle.sh": {
       "command": "just check",
       "lane": "check",

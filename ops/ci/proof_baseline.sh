@@ -6,8 +6,8 @@
 # that head's reach.
 #
 # Sourced by ops/ci/proof_evidence.sh. Each guard below is also called directly
-# by crates/jeryu-intelligence/tests/proof_evidence_lane.rs with a git stub on PATH, so
-# the refusals are exercised without a network, a forge or an auditor.
+# by crates/jeryu-codegraph/tests/proof_evidence_lane.rs with a git stub on PATH,
+# so the refusals are exercised without a network, a forge or an auditor.
 
 # The fetch URL of `origin`, and only when it is a real remote URL. `origin` is
 # the checkout's own configuration, which a pull request does not write; a
