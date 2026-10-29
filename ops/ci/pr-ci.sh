@@ -4,18 +4,12 @@
 # the same lanes on the GitHub mirror so the two surfaces cannot diverge.
 set -euo pipefail
 
-# The forge's gate runs this script with no argument, and then the proof lane
-# always runs. `--without-proof-lane` is for the GitHub mirror's workflow only:
-# its checkout cannot reach the forge's protected main, the one baseline the
-# lane may judge against, so it skips that lane, says so loudly, and runs
-# everything else. Any other argument is refused.
-run_proof_lane=1
-for arg in "$@"; do
-  case "$arg" in
-    --without-proof-lane) run_proof_lane=0 ;;
-    *) echo "[pr-ci] unknown argument: $arg" >&2; exit 2 ;;
-  esac
-done
+# Every lane, the proof lane included, runs on every invocation; nothing here
+# can be switched off, so any argument is refused.
+if [[ "$#" -ne 0 ]]; then
+  echo "[pr-ci] takes no arguments: $*" >&2
+  exit 2
+fi
 
 # BEGIN GENERATED JANKURAI PIN — DO NOT EDIT
 # The governed Jankurai identity is the binary installed on this host and its
@@ -92,11 +86,7 @@ bash ops/ci/security.sh
 bash ops/ci/artifact_support.sh
 
 # Evidence must pass before the required check succeeds.
-if [[ "$run_proof_lane" -eq 1 ]]; then
-  bash ops/ci/proof_evidence.sh
-else
-  echo "[pr-ci] PROOF LANE SKIPPED (--without-proof-lane): this run is not jeryu-intelligence/required. The forge's jeryu-intelligence/required runs ops/ci/proof_evidence.sh against its protected main on every head." >&2
-fi
+bash ops/ci/proof_evidence.sh
 
 echo "[pr-ci] workspace test suite" >&2
 cargo nextest run --workspace --build-jobs "$JOBS" --test-threads "$JOBS"

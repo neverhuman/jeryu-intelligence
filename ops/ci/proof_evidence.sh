@@ -31,6 +31,7 @@ source ops/ci/lib.sh
 source ops/ci/proof_baseline.sh
 require_tool git
 require_tool jq
+require_tool python3
 require_tool flock
 require_tool sha256sum
 require_jankurai

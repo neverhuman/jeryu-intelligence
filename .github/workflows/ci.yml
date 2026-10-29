@@ -24,9 +24,7 @@ jobs:
       - name: Ensure pinned jankurai
         run: bash ops/ci/ensure-jankurai.sh
       - name: PR CI (canonical gate)
-        # The proof lane needs the forge's protected main; the forge's own
-        # jeryu-intelligence/required runs it. Everything else runs here.
-        run: bash ops/ci/pr-ci.sh --without-proof-lane
+        run: bash ops/ci/pr-ci.sh
       - name: Upload audit artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

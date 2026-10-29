@@ -347,6 +347,11 @@ fn the_floor_is_the_policy_own_integer_and_never_lowered() {
         ("minimum_score = 85.5\n", None),
         ("minimum_score = 85\nminimum_score = 90\n", None),
         ("hard_findings_allowed = 0\n", None),
+        ("[scan]\nminimum_score = 90\n", None),
+        ("minimum_score = \"90\"\n", None),
+        ("minimum_score = true\n", None),
+        ("minimum_score = 82\n[scan]\nminimum_score = 99\n", Some("82")),
+        ("minimum_score = [\n", None),
     ] {
         fs::write(&policy, body).expect("policy");
         let output = guard(
@@ -687,36 +692,36 @@ fn the_tool_adoption_catalog_is_retained_verbatim() {
 }
 
 #[test]
-fn the_forge_gate_runs_the_lane_and_only_the_mirror_skips_it() {
+fn every_pr_ci_run_runs_the_lane_and_nothing_skips_it() {
     let pr_ci = fs::read_to_string(repo_root().join("ops/ci/pr-ci.sh")).expect("pr-ci.sh");
     assert!(
         pr_ci
             .lines()
-            .any(|line| line.trim() == "bash ops/ci/proof_evidence.sh"),
-        "ops/ci/pr-ci.sh runs the evidence lane"
+            .any(|line| line == "bash ops/ci/proof_evidence.sh"),
+        "ops/ci/pr-ci.sh runs the evidence lane unconditionally"
     );
     assert!(
-        pr_ci.contains("run_proof_lane=1"),
-        "the lane runs unless told otherwise"
+        !pr_ci.contains("without-proof-lane") && !pr_ci.contains("run_proof_lane"),
+        "no switch can skip the lane"
     );
-    assert!(pr_ci.contains("PROOF LANE SKIPPED (--without-proof-lane)"));
-    // Any argument but the one switch is refused before anything runs.
-    let unknown = Command::new("bash")
-        .arg(repo_root().join("ops/ci/pr-ci.sh"))
-        .arg("--skip-everything")
-        .output()
-        .expect("pr-ci");
-    assert_eq!(unknown.status.code(), Some(2));
+    // Any argument is refused before anything runs.
+    for arg in ["--without-proof-lane", "--skip-everything"] {
+        let refused = Command::new("bash")
+            .arg(repo_root().join("ops/ci/pr-ci.sh"))
+            .arg(arg)
+            .output()
+            .expect("pr-ci");
+        assert_eq!(refused.status.code(), Some(2), "{arg}");
+    }
     let workflow =
         fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).expect("ci.yml");
     assert!(
-        workflow.contains("run: bash ops/ci/pr-ci.sh --without-proof-lane"),
-        "the mirrored workflow skips only the proof lane, explicitly"
+        workflow
+            .lines()
+            .any(|line| line.trim() == "run: bash ops/ci/pr-ci.sh"),
+        "the workflow runs the whole gate with no arguments"
     );
-    assert!(
-        !workflow.contains("bash ops/ci/proof_evidence.sh"),
-        "the mirrored workflow never runs the lane against another baseline"
-    );
+    assert!(!workflow.contains("without-proof-lane"));
 }
 
 #[test]

@@ -18,8 +18,8 @@
 # go red after main moves past a score it does not reach.
 
 # The hosted source repository: the only place the baseline may come from.
-# No environment switches it; a surface that cannot reach it (the GitHub
-# mirror's workflow) skips the lane explicitly through pr-ci.sh instead.
+# No environment or argument switches it, and nothing skips the lane: a run
+# that cannot reach it fails.
 readonly PROOF_FORGE_URL='https://git.neverhuman.org/git/jeryu/jeryu-intelligence.git'
 
 # Refuse any origin but the hosted source repository, before anything is
@@ -116,26 +116,22 @@ proof_require_canonical_file() {
   fi
 }
 
-# Print the score floor POLICY asks for: its one integer `minimum_score`. No
-# constant here stands in for it, and a missing, repeated or fractional value
-# fails rather than falling back to some other number. The forge applies its
-# own host floor in its own jankurai/proof check.
+# Print the score floor POLICY asks for: its top-level integer `minimum_score`,
+# read with a TOML parser (the same key ops/ci/score.sh reads). No constant
+# here stands in for it: invalid TOML, or a key that is missing, fractional,
+# non-integer or only inside a table, fails rather than falling back to some
+# other number. The forge applies its own host floor in its own jankurai/proof
+# check.
 proof_effective_floor() {
   local policy="$1"
-  awk -F '=' '
-    /^[[:space:]]*minimum_score[[:space:]]*=/ {
-      count += 1
-      value = $2
-      sub(/[[:space:]]*#.*/, "", value)
-      gsub(/[[:space:]]/, "", value)
-      if (value !~ /^[0-9]+$/) exit 2
-      floor = value
-    }
-    END {
-      if (count != 1) exit 3
-      print floor
-    }
-  ' "$policy" || {
+  python3 -I -c '
+import sys, tomllib
+with open(sys.argv[1], "rb") as handle:
+    value = tomllib.load(handle).get("minimum_score")
+if type(value) is not int or value < 0:
+    sys.exit(2)
+print(value)
+' "$policy" 2>/dev/null || {
     printf 'audit policy must contain one integer minimum_score: %s\n' "$policy" >&2
     return 1
   }

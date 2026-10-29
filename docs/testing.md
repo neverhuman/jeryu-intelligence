@@ -34,12 +34,9 @@ network operations.
 
 `ops/ci/proof_evidence.sh` runs inside `ops/ci/pr-ci.sh`, so it is part of the
 protected `jeryu-intelligence/required` check and blocks merge
-(`agent/proof-lanes.toml`). The forge's gate runs `pr-ci.sh` with no argument,
-and then the lane always runs. The GitHub mirror's workflow cannot reach the
-forge's protected main, so it runs `pr-ci.sh --without-proof-lane`. That skips
-only this lane, with a log line saying the forge's required check runs it, and
-never switches the baseline. Every Jankurai tool in it runs on the exact head and every report is
-read and gated; nothing is synthesized. The rules are in `ops/ci/proof_baseline.sh`:
+(`agent/proof-lanes.toml`). `pr-ci.sh` takes no arguments and nothing skips the
+lane. Every Jankurai tool it runs runs on the exact head and its report is read
+and gated; nothing is synthesized. The rules are in `ops/ci/proof_baseline.sh`:
 
 - **Baseline.** Protected main's tip as the forge serves it when the gate runs.
   `origin` must be exactly
@@ -56,8 +53,8 @@ read and gated; nothing is synthesized. The rules are in `ops/ci/proof_baseline.
   Deleted paths leave no surface to bind; they are counted in the summary
   (`deleted_path_count`), and a deletion-only head still gets every whole-tree
   check.
-- **Ratchet and floor.** The floor is this repository's own integer
-  `minimum_score` in `agent/audit-policy.toml`. The head's whole tree must reach
+- **Ratchet and floor.** The floor is this repository's own top-level integer
+  `minimum_score` in `agent/audit-policy.toml`, read with a TOML parser. The head's whole tree must reach
   it and score at least main's, with no new cap or hard finding and no higher
   migration liability. The result depends on main's tip at gate time: rebase
   and rerun when main moves past a score the head does not reach.
