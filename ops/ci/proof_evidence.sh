@@ -104,6 +104,21 @@ host_floor=85
 floor="$policy_floor"
 (( floor >= host_floor )) || floor="$host_floor"
 
+# A CLI floor participates in the auditor's policy fingerprint. Apply the same
+# effective floor to main and head so the host floor is not a policy change.
+if (( floor != policy_floor )); then
+  rm -- target/jankurai/accepted-baseline.json target/jankurai/accepted-baseline.md
+  jankurai audit "$baseline_root" --mode advisory --full --no-score-history --read-only \
+    --policy agent/audit-policy.toml --fail-under "$floor" \
+    --json "target/jankurai/accepted-baseline.json" --md "target/jankurai/accepted-baseline.md"
+  jq -e --arg base "$base_commit" --argjson floor "$floor" '
+    .schema_version == "1.9.0" and .git.head == $base and .git.dirty_worktree == false and
+    (.score | type == "number") and .decision.minimum_score == $floor and
+    (.caps_applied | type == "array")
+  ' "target/jankurai/accepted-baseline.json" >/dev/null
+  baseline_score="$(jq -er '.score | floor' "target/jankurai/accepted-baseline.json")"
+fi
+
 jankurai proofbind verify . --changed-from "$base_commit" --mode advisory --out target/jankurai/proofbind/surface-witness.json --obligations-out target/jankurai/proofbind/obligations.json --md target/jankurai/proofbind/proofbind.md
 jq -e --arg head "$head_short" --arg head_full "$head_commit" \
   --argjson changed "$expected_changed" '
