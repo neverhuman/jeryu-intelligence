@@ -24,21 +24,26 @@ jobs:
       - name: Ensure pinned jankurai
         run: bash ops/ci/ensure-jankurai.sh
       - name: PR CI (canonical gate)
-        run: bash ops/ci/pr-ci.sh
+        # The proof lane needs the forge's protected main; the forge's own
+        # jeryu-intelligence/required runs it. Everything else runs here.
+        run: bash ops/ci/pr-ci.sh --without-proof-lane
       - name: Upload audit artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ci-audit-artifacts
+          # language-bad-behavior.log is listed for Jankurai's bad-behavior
+          # adoption check (an artifact upload reference); the audit itself
+          # evaluates those detectors.
           path: |
             .jankurai/
             target/jankurai/
-            target/jankurai/coverage/coverage-audit.md
-            target/jankurai/coverage/coverage-audit.json
-            target/jankurai/vibe-coverage.md
-            target/jankurai/vibe-coverage.json
             target/jankurai/migration-report.json
-            target/jankurai/ux-qa.json
+            target/jankurai/baseline-migration-report.json
+            target/jankurai/accepted-baseline.json
+            target/jankurai/proof-ratchet-score.json
+            target/jankurai/proof-ratchet-score.md
+            target/jankurai/proof-evidence-summary.json
             target/jankurai/rust/witness-graph.json
             target/jankurai/language-bad-behavior.log
             target/jankurai/copy-code.md

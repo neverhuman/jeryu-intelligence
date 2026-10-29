@@ -17,30 +17,18 @@
 # A result therefore depends on main's tip when the gate ran: the same head can
 # go red after main moves past a score it does not reach.
 
-# The hosted source repository. The forge's gate runner checks it out with
-# exactly this origin, and nothing else may serve the baseline there.
+# The hosted source repository: the only place the baseline may come from.
+# No environment switches it; a surface that cannot reach it (the GitHub
+# mirror's workflow) skips the lane explicitly through pr-ci.sh instead.
 readonly PROOF_FORGE_URL='https://git.neverhuman.org/git/jeryu/jeryu-intelligence.git'
-# The GitHub mirror the forge pushes main to. Accepted only inside a GitHub
-# Actions run on github.com, where actions/checkout sets origin to it; the
-# forge's own required check never takes its baseline from the mirror.
-readonly PROOF_MIRROR_URL='https://github.com/neverhuman/jeryu-intelligence'
 
-# Print the one origin this run may take its baseline from, or refuse.
-proof_expected_origin() {
-  if [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_SERVER_URL:-}" == https://github.com ]]; then
-    printf '%s\n' "$PROOF_MIRROR_URL"
-  else
-    printf '%s\n' "$PROOF_FORGE_URL"
-  fi
-}
-
-# Refuse any origin but the expected one, before anything is fetched from it.
-# Plaintext transports, look-alike hosts and local paths all fail here. Both
+# Refuse any origin but the hosted source repository, before anything is
+# fetched from it. Plaintext transports, mirrors, look-alike hosts and local
+# paths all fail here. Both
 # the configured URL and the URL git will actually use after any `insteadOf`
 # rewrite must match, so a host-level rewrite cannot redirect the fetch.
 proof_require_origin() {
-  local expected url resolved
-  expected="$(proof_expected_origin)"
+  local url resolved
   # The configured URL as written; `git remote get-url` would already apply
   # any insteadOf rewrite, which is what the second comparison looks for.
   url="$(git config --get remote.origin.url)" || {
@@ -48,7 +36,7 @@ proof_require_origin() {
     return 1
   }
   resolved="$(git ls-remote --get-url origin)" || return 1
-  if [[ "${url%.git}" != "${expected%.git}" ]]; then
+  if [[ "$url" != "$PROOF_FORGE_URL" ]]; then
     printf 'proof origin is not the hosted source repository: %s\n' "$url" >&2
     return 1
   fi
@@ -237,8 +225,26 @@ proof_require_migration() {
   }
 }
 
-# Baseline checkouts live under this repository's own target/, which nothing
-# else empties, so a run killed before its cleanup trap leaves one behind.
+# Print the directory baseline checkouts live in: outside the tree under test,
+# so no tool that audits `.` can see a second copy of main, and outside /tmp,
+# which the host empties at boot. Nothing else empties it, so a run killed
+# before its cleanup trap leaves a checkout behind; proof_sweep_stale clears
+# those. Refuses a directory inside REPO_ROOT.
+proof_baseline_root() {
+  local repo_root="$1" root
+  root="${XDG_CACHE_HOME:-$HOME/.cache}/jeryu-proof-baseline"
+  mkdir -p -- "$root" || return 1
+  root="$(cd -- "$root" && pwd -P)" || return 1
+  case "$root/" in
+    "$repo_root"/*)
+      printf 'proof baseline directory %s is inside the tree under test\n' "$root" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$root"
+}
+
+# Baseline checkouts live under proof_baseline_root.
 # Each run holds an exclusive flock on DIR/<prefix>.*/.lock for its whole life.
 # A directory whose lock can be taken belongs to no live run, but only one older
 # than ten minutes is removed: a run that has just made its directory and not

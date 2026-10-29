@@ -206,14 +206,14 @@
       "purpose": "verify local ops guidance and CI wrappers stay reproducible"
     },
     "tools/security-lane.sh": {
-      "command": "bash tools/security-lane.sh --strict && cargo test --locked -p jeryu-codegraph --test proof_evidence_lane",
+      "command": "cargo test --locked -p jeryu-codegraph --test proof_evidence_lane",
       "lane": "security",
-      "purpose": "run the strict security entrypoint the proof lane uses and its refusal tests"
+      "purpose": "verify the strict security entrypoint refuses unknown arguments and a missing scanner (the proof lane runs it for real)"
     },
     "tools/": {
-      "command": "just security",
+      "command": "cargo test --locked -p jeryu-codegraph --test proof_evidence_lane",
       "lane": "security",
-      "purpose": "verify the security entrypoint delegates to repository checks"
+      "purpose": "verify the tools/ entrypoints the proof lane runs"
     }
   },
   "workspace": "jeryu-intelligence"

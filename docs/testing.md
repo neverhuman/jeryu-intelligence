@@ -34,23 +34,23 @@ network operations.
 
 `ops/ci/proof_evidence.sh` runs inside `ops/ci/pr-ci.sh`, so it is part of the
 protected `jeryu-intelligence/required` check and blocks merge
-(`agent/proof-lanes.toml`). The mirrored workflow runs it only through
-`pr-ci.sh`. Every Jankurai tool in it runs on the exact head and every report is
+(`agent/proof-lanes.toml`). The forge's gate runs `pr-ci.sh` with no argument,
+and then the lane always runs. The GitHub mirror's workflow cannot reach the
+forge's protected main, so it runs `pr-ci.sh --without-proof-lane`. That skips
+only this lane, with a log line saying the forge's required check runs it, and
+never switches the baseline. Every Jankurai tool in it runs on the exact head and every report is
 read and gated; nothing is synthesized. The rules are in `ops/ci/proof_baseline.sh`:
 
 - **Baseline.** Protected main's tip as the forge serves it when the gate runs.
   `origin` must be exactly
   `https://git.neverhuman.org/git/jeryu/jeryu-intelligence.git`, both as
-  configured and as git resolves it after any `insteadOf` rewrite. Inside a
-  GitHub Actions run on github.com, and only there, the lane accepts the
-  mirror `https://github.com/neverhuman/jeryu-intelligence` instead and takes
-  the mirror's main as its baseline. The forge's own required check never
-  does. The lane fetches
+  configured and as git resolves it after any `insteadOf` rewrite. No
+  environment variable changes that. The lane fetches
   `main` from it and audits that commit in a disposable checkout under
-  `target/jeryu-intelligence-proof-baseline.*`, which needs network access to the
-  forge. The checkout is created after the tools that scan `.` (copy-code, rust
-  witness, proofbind, proofmark, security). No baseline is read from the tree
-  under test.
+  `${XDG_CACHE_HOME:-~/.cache}/jeryu-proof-baseline/jeryu-intelligence.*`,
+  outside the tree under test (so no audit of `.` sees a second copy of main)
+  and outside `/tmp`. That needs network access to the forge. No baseline is
+  read from the tree under test.
 - **Change set.** It starts at the head's fork point from that tip. A head behind
   the tip is judged, not refused. An empty change set (main's own head) passes.
   Deleted paths leave no surface to bind; they are counted in the summary

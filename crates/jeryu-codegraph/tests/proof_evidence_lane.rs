@@ -188,46 +188,57 @@ fn only_the_hosted_source_repository_may_serve_the_baseline() {
     refused(&guard(&fx.repo, "proof_require_origin"), "no origin remote");
 }
 
-/// The GitHub mirror is accepted only inside a GitHub Actions run on
-/// github.com, where actions/checkout sets it as origin; there the forge URL is
-/// not, and nowhere else is the mirror.
+/// No environment switches the baseline: inside a GitHub Actions run the
+/// mirror is refused like any other origin, and the forge URL still passes.
 #[test]
-fn the_github_mirror_serves_the_baseline_only_in_its_own_actions_run() {
+fn no_environment_switches_the_baseline_origin() {
     let fx = fixture();
     let actions = [
         ("GITHUB_ACTIONS", "true"),
         ("GITHUB_SERVER_URL", "https://github.com"),
     ];
-    let mirror = "https://github.com/neverhuman/jeryu-intelligence";
-    git(&fx.repo, &["remote", "add", "origin", mirror]);
-    ok(&guard_with(&fx.repo, "proof_require_origin", &actions));
-    refused(
-        &guard(&fx.repo, "proof_require_origin"),
-        "not the hosted source repository",
-    );
-    refused(
-        &guard_with(
-            &fx.repo,
-            "proof_require_origin",
-            &[
-                ("GITHUB_ACTIONS", "true"),
-                ("GITHUB_SERVER_URL", "https://ghe.example"),
-            ],
-        ),
-        "not the hosted source repository",
-    );
-    git(
-        &fx.repo,
-        &["remote", "set-url", "origin", &format!("{mirror}.git")],
-    );
-    ok(&guard_with(&fx.repo, "proof_require_origin", &actions));
-    for url in ["https://github.com/someone-else/jeryu-intelligence", FORGE] {
-        git(&fx.repo, &["remote", "set-url", "origin", url]);
+    for mirror in [
+        "https://github.com/neverhuman/jeryu-intelligence",
+        "https://github.com/neverhuman/jeryu-intelligence.git",
+    ] {
+        git(&fx.repo, &["remote", "add", "origin", mirror]);
         refused(
             &guard_with(&fx.repo, "proof_require_origin", &actions),
             "not the hosted source repository",
         );
+        git(&fx.repo, &["remote", "remove", "origin"]);
     }
+    git(&fx.repo, &["remote", "add", "origin", FORGE]);
+    ok(&guard_with(&fx.repo, "proof_require_origin", &actions));
+}
+
+/// Baseline checkouts live outside the tree under test (and outside /tmp).
+#[test]
+fn baseline_checkouts_live_outside_the_tree_under_test() {
+    let fx = fixture();
+    let cache = scratch();
+    let root = ok(&guard_with(
+        &fx.repo,
+        &format!("proof_baseline_root {:?}", fx.repo.display().to_string()),
+        &[("XDG_CACHE_HOME", &cache.path().display().to_string())],
+    ));
+    assert_eq!(
+        PathBuf::from(&root),
+        cache.path().join("jeryu-proof-baseline")
+    );
+    let inside = fx.repo.join("target");
+    refused(
+        &guard_with(
+            &fx.repo,
+            &format!("proof_baseline_root {:?}", fx.repo.display().to_string()),
+            &[("XDG_CACHE_HOME", &inside.display().to_string())],
+        ),
+        "inside the tree under test",
+    );
+    let lane = lane_source();
+    assert!(lane.contains("baseline_dir=\"$(proof_baseline_root \"$repo_root\")\""));
+    assert!(!lane.contains("target/jeryu-intelligence-proof-baseline"));
+    assert!(lane.contains("pwd -P"), "repo_root is the physical path");
 }
 
 /// A git `insteadOf` rewrite would send the fetch somewhere other than the
@@ -676,20 +687,35 @@ fn the_tool_adoption_catalog_is_retained_verbatim() {
 }
 
 #[test]
-fn the_required_gate_runs_the_lane_once() {
+fn the_forge_gate_runs_the_lane_and_only_the_mirror_skips_it() {
     let pr_ci = fs::read_to_string(repo_root().join("ops/ci/pr-ci.sh")).expect("pr-ci.sh");
     assert!(
         pr_ci
             .lines()
             .any(|line| line.trim() == "bash ops/ci/proof_evidence.sh"),
-        "ops/ci/pr-ci.sh must run the evidence lane unconditionally"
+        "ops/ci/pr-ci.sh runs the evidence lane"
     );
+    assert!(
+        pr_ci.contains("run_proof_lane=1"),
+        "the lane runs unless told otherwise"
+    );
+    assert!(pr_ci.contains("PROOF LANE SKIPPED (--without-proof-lane)"));
+    // Any argument but the one switch is refused before anything runs.
+    let unknown = Command::new("bash")
+        .arg(repo_root().join("ops/ci/pr-ci.sh"))
+        .arg("--skip-everything")
+        .output()
+        .expect("pr-ci");
+    assert_eq!(unknown.status.code(), Some(2));
     let workflow =
         fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).expect("ci.yml");
-    assert!(workflow.contains("bash ops/ci/pr-ci.sh"));
+    assert!(
+        workflow.contains("run: bash ops/ci/pr-ci.sh --without-proof-lane"),
+        "the mirrored workflow skips only the proof lane, explicitly"
+    );
     assert!(
         !workflow.contains("bash ops/ci/proof_evidence.sh"),
-        "the mirrored workflow runs the lane through pr-ci.sh only"
+        "the mirrored workflow never runs the lane against another baseline"
     );
 }
 

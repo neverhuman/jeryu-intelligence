@@ -25,7 +25,7 @@
 # jankurai coverage audit . --config agent/coverage-sources.toml --json target/jankurai/coverage/coverage-audit.json --md target/jankurai/coverage/coverage-audit.md
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$repo_root"
 source ops/ci/lib.sh
 source ops/ci/proof_baseline.sh
@@ -147,14 +147,15 @@ jq -e --arg head "$head_commit" '
   ([.commands[] | select(.status == "ran" and .exit_code == 0)] | length) >= 1
 ' target/jankurai/security/evidence.json >/dev/null
 
-# Disposable checkouts under target/, each run holding its own lock.
-proof_sweep_stale "$repo_root/target" jeryu-intelligence-proof-baseline
-baseline_parent="$(mktemp -d "$repo_root/target/jeryu-intelligence-proof-baseline.XXXXXXXX")"
+# Disposable checkouts outside the tree under test, each run holding its lock.
+baseline_dir="$(proof_baseline_root "$repo_root")"
+proof_sweep_stale "$baseline_dir" jeryu-intelligence
+baseline_parent="$(mktemp -d "$baseline_dir/jeryu-intelligence.XXXXXXXX")"
 exec {proof_lock_fd}>"$baseline_parent/.lock"
 flock --exclusive "$proof_lock_fd"
 cleanup_baseline() {
   case "$baseline_parent" in
-    "$repo_root/target"/jeryu-intelligence-proof-baseline.*) rm -rf -- "$baseline_parent" ;;
+    "$baseline_dir"/jeryu-intelligence.*) rm -rf -- "$baseline_parent" ;;
     *) printf 'refusing to remove unexpected baseline path: %s\n' "$baseline_parent" >&2; return 1 ;;
   esac
 }
