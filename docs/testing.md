@@ -40,7 +40,12 @@ read and gated; nothing is synthesized. The rules are in `ops/ci/proof_baseline.
 
 - **Baseline.** Protected main's tip as the forge serves it when the gate runs.
   `origin` must be exactly
-  `https://git.neverhuman.org/git/jeryu/jeryu-intelligence.git`. The lane fetches
+  `https://git.neverhuman.org/git/jeryu/jeryu-intelligence.git`, both as
+  configured and as git resolves it after any `insteadOf` rewrite. Inside a
+  GitHub Actions run on github.com, and only there, the lane accepts the
+  mirror `https://github.com/neverhuman/jeryu-intelligence` instead and takes
+  the mirror's main as its baseline. The forge's own required check never
+  does. The lane fetches
   `main` from it and audits that commit in a disposable checkout under
   `target/jeryu-intelligence-proof-baseline.*`, which needs network access to the
   forge. The checkout is created after the tools that scan `.` (copy-code, rust
@@ -48,6 +53,9 @@ read and gated; nothing is synthesized. The rules are in `ops/ci/proof_baseline.
   under test.
 - **Change set.** It starts at the head's fork point from that tip. A head behind
   the tip is judged, not refused. An empty change set (main's own head) passes.
+  Deleted paths leave no surface to bind; they are counted in the summary
+  (`deleted_path_count`), and a deletion-only head still gets every whole-tree
+  check.
 - **Ratchet and floor.** The floor is this repository's own integer
   `minimum_score` in `agent/audit-policy.toml`. The head's whole tree must reach
   it and score at least main's, with no new cap or hard finding and no higher
@@ -57,6 +65,9 @@ read and gated; nothing is synthesized. The rules are in `ops/ci/proof_baseline.
   lower the floor. It is then judged under main's policy against main's
   baseline, and under its own policy against main's tree audited with that
   policy.
+- **Leftovers.** Each run holds an exclusive `flock` on its checkout's `.lock`.
+  The next run removes checkouts older than ten minutes whose lock nobody
+  holds, and unlocked ones older than two hours.
 - **Security.** `tools/security-lane.sh` is strict: when gitleaks (or
   actionlint, with workflows present) is not installed it fails instead of
   recording a scan that never ran.

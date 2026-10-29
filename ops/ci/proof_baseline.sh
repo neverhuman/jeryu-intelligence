@@ -17,20 +17,43 @@
 # A result therefore depends on main's tip when the gate ran: the same head can
 # go red after main moves past a score it does not reach.
 
-# The hosted source repository. Nothing else may serve the baseline.
+# The hosted source repository. The forge's gate runner checks it out with
+# exactly this origin, and nothing else may serve the baseline there.
 readonly PROOF_FORGE_URL='https://git.neverhuman.org/git/jeryu/jeryu-intelligence.git'
+# The GitHub mirror the forge pushes main to. Accepted only inside a GitHub
+# Actions run on github.com, where actions/checkout sets origin to it; the
+# forge's own required check never takes its baseline from the mirror.
+readonly PROOF_MIRROR_URL='https://github.com/neverhuman/jeryu-intelligence'
 
-# Refuse any origin but the hosted source repository, before anything is
-# fetched from it. Plaintext transports, mirrors, look-alike hosts and local
-# paths all fail here.
+# Print the one origin this run may take its baseline from, or refuse.
+proof_expected_origin() {
+  if [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_SERVER_URL:-}" == https://github.com ]]; then
+    printf '%s\n' "$PROOF_MIRROR_URL"
+  else
+    printf '%s\n' "$PROOF_FORGE_URL"
+  fi
+}
+
+# Refuse any origin but the expected one, before anything is fetched from it.
+# Plaintext transports, look-alike hosts and local paths all fail here. Both
+# the configured URL and the URL git will actually use after any `insteadOf`
+# rewrite must match, so a host-level rewrite cannot redirect the fetch.
 proof_require_origin() {
-  local url
-  url="$(git remote get-url origin)" || {
+  local expected url resolved
+  expected="$(proof_expected_origin)"
+  # The configured URL as written; `git remote get-url` would already apply
+  # any insteadOf rewrite, which is what the second comparison looks for.
+  url="$(git config --get remote.origin.url)" || {
     printf 'proof evidence has no origin remote\n' >&2
     return 1
   }
-  if [[ "$url" != "$PROOF_FORGE_URL" ]]; then
+  resolved="$(git ls-remote --get-url origin)" || return 1
+  if [[ "${url%.git}" != "${expected%.git}" ]]; then
     printf 'proof origin is not the hosted source repository: %s\n' "$url" >&2
+    return 1
+  fi
+  if [[ "$resolved" != "$url" ]]; then
+    printf 'proof origin %s is rewritten to %s by git configuration\n' "$url" "$resolved" >&2
     return 1
   fi
 }
@@ -72,12 +95,22 @@ proof_fork_point() {
 }
 
 # Write the NUL-separated paths HEAD_COMMIT adds, copies, modifies, renames or
-# retypes since FORK_COMMIT to OUT, sorted. The diff goes to a file first, so a
+# retypes since FORK_COMMIT to OUT, sorted. Deleted paths have no surface left to
+# bind and are counted separately (proof_deleted_paths). The diff goes to a file first, so a
 # failing git diff fails the caller instead of leaving an empty change set
 # behind a process substitution. An empty OUT is a change set of nothing.
 proof_changed_paths() {
   local fork="$1" head="$2" out="$3"
   git diff --no-ext-diff --name-only -z --diff-filter=ACMRT \
+    "${fork}...${head}" >"$out.unsorted" || return 1
+  LC_ALL=C sort -zu "$out.unsorted" >"$out" || return 1
+  rm -f -- "$out.unsorted"
+}
+
+# Write the NUL-separated paths HEAD_COMMIT deletes since FORK_COMMIT to OUT.
+proof_deleted_paths() {
+  local fork="$1" head="$2" out="$3"
+  git diff --no-ext-diff --name-only -z --diff-filter=D \
     "${fork}...${head}" >"$out.unsorted" || return 1
   LC_ALL=C sort -zu "$out.unsorted" >"$out" || return 1
   rm -f -- "$out.unsorted"
@@ -206,10 +239,12 @@ proof_require_migration() {
 
 # Baseline checkouts live under this repository's own target/, which nothing
 # else empties, so a run killed before its cleanup trap leaves one behind.
-# Each run holds an exclusive flock on DIR/<prefix>.*/.lock for its whole life;
-# a directory whose lock can be taken belongs to no live run and is removed.
-# One without a lock file (a run killed between mktemp and taking the lock, or
-# an older layout) is removed only after two hours. A sweep that cannot remove a
+# Each run holds an exclusive flock on DIR/<prefix>.*/.lock for its whole life.
+# A directory whose lock can be taken belongs to no live run, but only one older
+# than ten minutes is removed: a run that has just made its directory and not
+# yet taken the lock is left alone. One without a lock file (a run killed
+# between mktemp and taking the lock, or an older layout) is removed only after
+# two hours. A sweep that cannot remove a
 # stale directory fails the lane rather than letting the pile grow unseen.
 proof_sweep_stale() {
   local dir="$1" prefix="$2" entry
@@ -219,6 +254,7 @@ proof_sweep_stale() {
   for entry in "$dir/$prefix".*; do
     [[ -d "$entry" && ! -L "$entry" ]] || continue
     if [[ -f "$entry/.lock" ]]; then
+      [[ -n "$(find "$entry" -maxdepth 0 -mmin +10)" ]] || continue
       flock --exclusive --nonblock "$entry/.lock" true 2>/dev/null || continue
     elif [[ -z "$(find "$entry" -maxdepth 0 -mmin +120)" ]]; then
       continue

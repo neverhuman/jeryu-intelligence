@@ -40,6 +40,7 @@ proof_require_canonical_file "$candidate_policy"
 candidate_floor="$(proof_effective_floor "$candidate_policy")"
 
 proof_require_origin
+origin_url="$(git config --get remote.origin.url)"
 proof_require_history
 base_commit="$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')"
 head_commit="$(git rev-parse --verify 'HEAD^{commit}')"
@@ -61,12 +62,15 @@ rm -rf -- \
   target/jankurai/baseline-migration-report.json target/jankurai/baseline-migration-report.md \
   target/jankurai/migration-report.json target/jankurai/migration-report.md \
   target/jankurai/changed-paths target/jankurai/changed-paths.unsorted \
+  target/jankurai/deleted-paths target/jankurai/deleted-paths.unsorted \
   target/jankurai/copy-code.json target/jankurai/copy-code.md \
   target/jankurai/repair-queue.jsonl target/jankurai/proof-evidence-summary.json \
   target/jankurai/proofbind target/jankurai/proofmark target/jankurai/rust target/jankurai/security
 mkdir -p target/jankurai/proofbind target/jankurai/proofmark target/jankurai/rust target/jankurai/security
 
 proof_changed_paths "$fork_commit" "$head_commit" target/jankurai/changed-paths
+proof_deleted_paths "$fork_commit" "$head_commit" target/jankurai/deleted-paths
+deleted_count="$(tr -cd '\0' < target/jankurai/deleted-paths | wc -c)"
 # Read with a plain redirect, then check every listed path was read: an empty
 # change set passes below, so a short read must not look like one.
 mapfile -d '' -t changed_paths < target/jankurai/changed-paths
@@ -80,9 +84,11 @@ expected_changed="$(
 )"
 
 if [[ "${#changed_paths[@]}" -eq 0 ]]; then
-  # Protected main gating its own head, or a head that touches nothing: there
-  # is no change surface to bind. Every whole-tree check below still runs.
-  printf '[proof] empty change set from fork point %s\n' "$fork_commit" >&2
+  # Protected main gating its own head, a head that touches nothing, or one
+  # that only deletes: no extant change surface is left to bind. Every
+  # whole-tree check below still runs, and deletions are counted in the summary.
+  printf '[proof] no extant change surface from fork point %s (%s deleted path(s))\n' \
+    "$fork_commit" "$deleted_count" >&2
 else
   # Proofbind and proofmark stay advisory in Jankurai 1.7.5: required mode asks
   # Rust line and mutation evidence of contract prose too. They run for real
@@ -200,7 +206,7 @@ protected_policy="$baseline_root/agent/audit-policy.toml"
 proof_require_canonical_file "$protected_policy"
 protected_floor="$(proof_effective_floor "$protected_policy")"
 printf '[proof] baseline: protected main %s from %s (fork point %s)\n' \
-  "$base_commit" "$PROOF_FORGE_URL" "$fork_commit" >&2
+  "$base_commit" "$origin_url" "$fork_commit" >&2
 
 audit_report "$baseline_root" "$protected_floor" \
   target/jankurai/accepted-baseline.json target/jankurai/accepted-baseline.md
@@ -258,13 +264,16 @@ cleanup_baseline
 # Nothing above may have moved the head, protected main, the origin or the tree.
 if [[ "$(git rev-parse --verify 'HEAD^{commit}')" != "$head_commit" ||
       "$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')" != "$base_commit" ||
-      "$(git remote get-url origin)" != "$PROOF_FORGE_URL" ||
+      "$(git config --get remote.origin.url)" != "$origin_url" ||
+      "$(git ls-remote --get-url origin)" != "$origin_url" ||
       -n "$(git status --porcelain=v1 --untracked-files=no)" ]]; then
   printf 'the proof commands moved the head, protected main, the origin or the tracked tree\n' >&2
   exit 1
 fi
 
 sha256_of() { sha256sum <"$1" | cut -d' ' -f1; }
+dirty=false
+[[ -z "$(git status --porcelain=v1 --untracked-files=no)" ]] || dirty=true
 proofbind_surface=null
 proofmark_review=null
 if [[ "${#changed_paths[@]}" -gt 0 ]]; then
@@ -274,7 +283,9 @@ fi
 score="$(jq -er '.score' target/jankurai/proof-ratchet-score.json)"
 jq -n \
   --arg head "$head_commit" --arg base "$base_commit" --arg fork "$fork_commit" \
-  --arg origin "$PROOF_FORGE_URL" \
+  --arg origin "$origin_url" \
+  --argjson deleted_count "$deleted_count" \
+  --argjson dirty "$dirty" \
   --argjson changed_count "${#changed_paths[@]}" \
   --argjson floor "$protected_floor" --argjson candidate_floor "$candidate_floor" \
   --argjson policy_amended "$policy_amended" \
@@ -288,7 +299,7 @@ jq -n \
   '{schema_version:"jeryu.intelligence.proof-evidence/v2",git_head:$head,
     base_commit:$base,fork_point:$fork,baseline_origin:$origin,
     baseline_source:"protected-main-tip-from-hosted-origin",
-    dirty_worktree:false,changed_path_count:$changed_count,
+    dirty_worktree:$dirty,changed_path_count:$changed_count,deleted_path_count:$deleted_count,
     score:$score,baseline_score:$baseline_score,floor:$floor,
     candidate_floor:$candidate_floor,policy_amended:$policy_amended,
     changed_surface_count:$proofbind_surface,proofmark_review_obligations:$proofmark_review,

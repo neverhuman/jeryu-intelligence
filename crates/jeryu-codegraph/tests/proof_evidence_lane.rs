@@ -68,15 +68,29 @@ fn with_identity(command: &mut Command) -> &mut Command {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
 }
 
-/// Source the guards in `cwd` and run `snippet`.
+/// Source the guards in `cwd` and run `snippet`, outside GitHub Actions.
 fn guard(cwd: &Path, snippet: &str) -> Output {
-    with_identity(Command::new("bash").arg("-c").arg(format!(
-        "set -euo pipefail\nsource {:?}\n{snippet}",
-        guards().display().to_string()
-    )))
-    .current_dir(cwd)
-    .output()
-    .expect("run guard")
+    guard_with(cwd, snippet, &[])
+}
+
+/// [`guard`] with extra environment, e.g. a GitHub Actions run.
+fn guard_with(cwd: &Path, snippet: &str, env: &[(&str, &str)]) -> Output {
+    let mut command = Command::new("bash");
+    command
+        .arg("-c")
+        .arg(format!(
+            "set -euo pipefail\nsource {:?}\n{snippet}",
+            guards().display().to_string()
+        ))
+        .env_remove("GITHUB_ACTIONS")
+        .env_remove("GITHUB_SERVER_URL");
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    with_identity(&mut command)
+        .current_dir(cwd)
+        .output()
+        .expect("run guard")
 }
 
 fn ok(output: &Output) -> String {
@@ -172,6 +186,90 @@ fn only_the_hosted_source_repository_may_serve_the_baseline() {
     }
     git(&fx.repo, &["remote", "remove", "origin"]);
     refused(&guard(&fx.repo, "proof_require_origin"), "no origin remote");
+}
+
+/// The GitHub mirror is accepted only inside a GitHub Actions run on
+/// github.com, where actions/checkout sets it as origin; there the forge URL is
+/// not, and nowhere else is the mirror.
+#[test]
+fn the_github_mirror_serves_the_baseline_only_in_its_own_actions_run() {
+    let fx = fixture();
+    let actions = [
+        ("GITHUB_ACTIONS", "true"),
+        ("GITHUB_SERVER_URL", "https://github.com"),
+    ];
+    let mirror = "https://github.com/neverhuman/jeryu-intelligence";
+    git(&fx.repo, &["remote", "add", "origin", mirror]);
+    ok(&guard_with(&fx.repo, "proof_require_origin", &actions));
+    refused(
+        &guard(&fx.repo, "proof_require_origin"),
+        "not the hosted source repository",
+    );
+    refused(
+        &guard_with(
+            &fx.repo,
+            "proof_require_origin",
+            &[
+                ("GITHUB_ACTIONS", "true"),
+                ("GITHUB_SERVER_URL", "https://ghe.example"),
+            ],
+        ),
+        "not the hosted source repository",
+    );
+    git(
+        &fx.repo,
+        &["remote", "set-url", "origin", &format!("{mirror}.git")],
+    );
+    ok(&guard_with(&fx.repo, "proof_require_origin", &actions));
+    for url in ["https://github.com/someone-else/jeryu-intelligence", FORGE] {
+        git(&fx.repo, &["remote", "set-url", "origin", url]);
+        refused(
+            &guard_with(&fx.repo, "proof_require_origin", &actions),
+            "not the hosted source repository",
+        );
+    }
+}
+
+/// A git `insteadOf` rewrite would send the fetch somewhere other than the
+/// origin the check read; the resolved URL must match too.
+#[test]
+fn a_rewritten_origin_is_refused() {
+    let fx = fixture();
+    git(&fx.repo, &["remote", "add", "origin", FORGE]);
+    git(
+        &fx.repo,
+        &[
+            "config",
+            "url.https://elsewhere.example/.insteadOf",
+            "https://git.neverhuman.org/",
+        ],
+    );
+    refused(&guard(&fx.repo, "proof_require_origin"), "is rewritten to");
+}
+
+/// Deleted paths are not an extant surface, but they are counted, not lost.
+#[test]
+fn deletions_are_recorded_apart_from_the_change_set() {
+    let fx = fixture();
+    git(&fx.repo, &["switch", "--quiet", "-c", "deleting", &fx.fork]);
+    git(&fx.repo, &["rm", "--quiet", "agent/audit-policy.toml"]);
+    git(&fx.repo, &["commit", "--quiet", "-m", "delete"]);
+    let head = git(&fx.repo, &["rev-parse", "HEAD"]);
+    let changed = fx.repo.join("changed");
+    let deleted = fx.repo.join("deleted");
+    ok(&guard(
+        &fx.repo,
+        &format!(
+            "proof_changed_paths {} {head} {:?}\nproof_deleted_paths {} {head} {:?}",
+            fx.fork, changed, fx.fork, deleted
+        ),
+    ));
+    assert!(fs::read(&changed).expect("changed").is_empty());
+    assert_eq!(
+        fs::read(&deleted).expect("deleted"),
+        b"agent/audit-policy.toml\0"
+    );
+    assert!(lane_source().contains("deleted_path_count:$deleted_count"));
 }
 
 #[test]
@@ -414,15 +512,18 @@ fn the_sweep_removes_only_checkouts_no_live_run_holds() {
     let parent = temp.path().join("target");
     let dir = |name: &str| parent.join(format!("jeryu-intelligence-proof-baseline.{name}"));
     let (live, released, fresh, aged) = (dir("live"), dir("released"), dir("fresh"), dir("aged"));
+    let just_made = dir("just-made");
     let other = parent.join("debug");
-    for path in [&live, &released, &fresh, &aged, &other] {
+    for path in [&live, &released, &fresh, &aged, &just_made, &other] {
         fs::create_dir_all(path.join("main")).expect("dir");
     }
     fs::write(live.join(".lock"), "").expect("lock");
     fs::write(released.join(".lock"), "").expect("lock");
+    // Made a moment ago, lock file written but not yet taken: left alone.
+    fs::write(just_made.join(".lock"), "").expect("lock");
     // A live run that has run for longer than two hours keeps its checkout:
     // the lock, not the age, says whether it is in use.
-    for path in [&live, &aged] {
+    for path in [&live, &aged, &released] {
         let status = Command::new("touch")
             .args(["-d", "4 hours ago"])
             .arg(path)
@@ -452,6 +553,10 @@ fn the_sweep_removes_only_checkouts_no_live_run_holds() {
     assert!(
         fresh.exists(),
         "a new checkout not yet locked is left alone"
+    );
+    assert!(
+        just_made.exists(),
+        "a checkout younger than ten minutes is left alone before its run takes the lock"
     );
     assert!(
         !aged.exists(),

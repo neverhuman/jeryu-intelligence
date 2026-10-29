@@ -141,12 +141,12 @@
       "purpose": "verify local CI wrappers are reproducible and audit-visible"
     },
     "ops/ci/proof_baseline.sh": {
-      "command": "cargo test --locked -p jeryu-codegraph --test proof_evidence_lane",
+      "command": "just fast && just check && just score && cargo test --locked -p jeryu-codegraph --test proof_evidence_lane",
       "lane": "check",
       "purpose": "verify the ratchet baseline guards refuse a baseline the head can write"
     },
     "ops/ci/proof_evidence.sh": {
-      "command": "cargo test --locked -p jeryu-codegraph --test proof_evidence_lane",
+      "command": "just fast && just check && just score && cargo test --locked -p jeryu-codegraph --test proof_evidence_lane",
       "lane": "check",
       "purpose": "verify the evidence lane gates every tool result it produces"
     },
@@ -204,6 +204,11 @@
       "command": "just fast && just check && just score",
       "lane": "ci",
       "purpose": "verify local ops guidance and CI wrappers stay reproducible"
+    },
+    "tools/security-lane.sh": {
+      "command": "bash tools/security-lane.sh --strict && cargo test --locked -p jeryu-codegraph --test proof_evidence_lane",
+      "lane": "security",
+      "purpose": "run the strict security entrypoint the proof lane uses and its refusal tests"
     },
     "tools/": {
       "command": "just security",
